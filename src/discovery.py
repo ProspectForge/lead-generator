@@ -1,6 +1,7 @@
 # src/discovery.py
 import asyncio
 import logging
+import httpx
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
@@ -15,6 +16,18 @@ logger = logging.getLogger(__name__)
 # Limits for sampling/batching
 SAMPLE_CITIES_LIMIT = 10
 BRANDS_TO_EXPAND_LIMIT = 20
+
+# Transient error codes that should be silently ignored (handled by retries)
+SILENT_ERROR_CODES = {429, 503, 500}
+
+
+def _is_transient_error(e: Exception) -> bool:
+    """Check if exception is a transient error that should be silently ignored."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return e.response.status_code in SILENT_ERROR_CODES
+    if isinstance(e, httpx.TimeoutException):
+        return True
+    return False
 
 
 class Discovery:
@@ -114,7 +127,8 @@ class Discovery:
                         for p in places
                     ]
                 except Exception as e:
-                    logger.warning("Google Places search failed for %s in %s: %s", query, city, e)
+                    if not _is_transient_error(e):
+                        logger.warning("Google Places search failed for %s in %s: %s", query, city, e)
                     return []
 
         with Progress(
@@ -171,7 +185,8 @@ class Discovery:
                             "source": "bestof_scrape"
                         })
                 except Exception as e:
-                    logger.warning("Scraping failed for %s in %s: %s", query, city, e)
+                    if not _is_transient_error(e):
+                        logger.warning("Scraping failed for %s in %s: %s", query, city, e)
 
         return results
 
@@ -228,6 +243,7 @@ class Discovery:
                 )
                 results.extend(expanded)
             except Exception as e:
-                logger.warning("Brand expansion failed for %s: %s", brand["name"], e)
+                if not _is_transient_error(e):
+                    logger.warning("Brand expansion failed for %s: %s", brand["name"], e)
 
         return results
