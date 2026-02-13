@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 80">
+  <defs>
+    <linearGradient id="wordGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3B82F6"/>
+      <stop offset="100%" style="stop-color:#1D4ED8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ProspectForge wordmark -->
+  <text x="0" y="55"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="48"
+        font-weight="700"
+        fill="url(#wordGrad)">Prospect</text>
+  <text x="195" y="55"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="48"
+        font-weight="400"
+        fill="#64748B">Forge</text>
+</svg>
