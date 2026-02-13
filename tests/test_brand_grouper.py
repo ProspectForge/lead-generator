@@ -242,3 +242,38 @@ class TestLLMFallback:
         result = analyzer.analyze(groups)
 
         assert ["fleet feet running", "fleet feet sports"] in result.merges
+
+
+class TestFullPipeline:
+    """Integration tests for the complete brand grouping pipeline."""
+
+    def test_full_pipeline_filters_large_chains(self):
+        places = [
+            {"name": "Nike Store", "website": "https://nike.com", "city": "Toronto, ON"},
+            {"name": "Nike Toronto", "website": "https://nike.com", "city": "Toronto, ON"},
+            {"name": "Nike Factory Outlet", "website": "https://nike.com", "city": "Vancouver, BC"},
+            {"name": "Local Running Shop", "website": "https://localrunning.com", "city": "Toronto, ON"},
+            {"name": "Local Running Shop", "website": "https://localrunning.com", "city": "Vancouver, BC"},
+            {"name": "Local Running Shop", "website": "https://localrunning.com", "city": "Montreal, QC"},
+        ]
+
+        grouper = BrandGrouper()
+        groups = grouper.group(places)
+        filtered = grouper.filter_with_blocklist(groups)
+
+        # Nike should be blocked, Local Running Shop should pass
+        assert len(filtered) == 1
+        assert "local" in filtered[0].normalized_name
+
+    def test_location_suffixes_grouped(self):
+        places = [
+            {"name": "Healthy Planet - Yonge & Dundas", "website": "https://healthyplanet.com", "city": "Toronto, ON"},
+            {"name": "Healthy Planet - Queen Street", "website": "https://healthyplanet.com", "city": "Toronto, ON"},
+            {"name": "Healthy Planet Downtown", "website": "https://healthyplanet.com", "city": "Toronto, ON"},
+        ]
+
+        grouper = BrandGrouper()
+        groups = grouper.group(places)
+
+        assert len(groups) == 1
+        assert groups[0].location_count == 3

@@ -408,3 +408,69 @@ class BrandGrouper:
             g for g in groups
             if self.min_locations <= g.location_count <= self.max_locations
         ]
+
+    def filter_with_blocklist(self, groups: list[BrandGroup]) -> list[BrandGroup]:
+        """Filter groups by location count and blocklist."""
+        checker = BlocklistChecker()
+
+        filtered = []
+        for g in groups:
+            # Check location count
+            if not (self.min_locations <= g.location_count <= self.max_locations):
+                continue
+
+            # Check blocklist
+            if checker.is_blocked(g.normalized_name):
+                continue
+
+            filtered.append(g)
+
+        return filtered
+
+    def process_with_llm(self, groups: list[BrandGroup]) -> list[BrandGroup]:
+        """Process groups with LLM for final disambiguation."""
+        analyzer = LLMBrandAnalyzer()
+        result = analyzer.analyze(groups)
+
+        # Apply merges
+        if result.merges:
+            groups = self._apply_merges(groups, result.merges)
+
+        # Filter out LLM-detected large chains
+        if result.large_chains:
+            large_chain_set = set(result.large_chains)
+            groups = [g for g in groups if g.normalized_name not in large_chain_set]
+
+        return groups
+
+    def _apply_merges(self, groups: list[BrandGroup], merges: list[list[str]]) -> list[BrandGroup]:
+        """Apply LLM-suggested merges to groups."""
+        # Build lookup
+        by_name = {g.normalized_name: g for g in groups}
+        merged_names = set()
+
+        result = []
+
+        for merge_set in merges:
+            # Find groups to merge
+            to_merge = [by_name[name] for name in merge_set if name in by_name]
+            if len(to_merge) < 2:
+                continue
+
+            # Merge into first
+            base = to_merge[0]
+            for other in to_merge[1:]:
+                base.original_names.extend(other.original_names)
+                base.location_count += other.location_count
+                base.locations.extend(other.locations)
+                for city in other.cities:
+                    if city not in base.cities:
+                        base.cities.append(city)
+                merged_names.add(other.normalized_name)
+
+        # Return all groups except those merged away
+        for g in groups:
+            if g.normalized_name not in merged_names:
+                result.append(g)
+
+        return result
