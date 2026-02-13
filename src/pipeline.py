@@ -17,6 +17,7 @@ from src.places_search import PlacesSearcher, PlaceResult
 from src.brand_grouper import BrandGrouper, BrandGroup
 from src.ecommerce_check import EcommerceChecker
 from src.linkedin_enrich import LinkedInEnricher
+from src.apollo_enrich import ApolloEnricher
 from src.discovery import Discovery
 
 console = Console()
@@ -160,6 +161,7 @@ class Pipeline:
             "marketplaces": brand.marketplaces,
             "marketplace_links": brand.marketplace_links,
             "priority": brand.priority,
+            "ecommerce_platform": brand.ecommerce_platform,
         }
 
     def _deserialize_brand(self, data: dict) -> BrandGroup:
@@ -176,6 +178,7 @@ class Pipeline:
             marketplaces=data.get("marketplaces", []),
             marketplace_links=data.get("marketplace_links", {}),
             priority=data.get("priority", "medium"),
+            ecommerce_platform=data.get("ecommerce_platform"),
         )
 
     def _show_stage_header(self, stage_num: int, title: str, description: str):
@@ -381,10 +384,11 @@ class Pipeline:
             async with semaphore:
                 try:
                     result = await checker.check(brand.website)
-                    # Attach marketplace data to brand
+                    # Attach marketplace and platform data to brand
                     brand.marketplaces = result.marketplaces
                     brand.marketplace_links = result.marketplace_links
                     brand.priority = result.priority
+                    brand.ecommerce_platform = result.platform  # Shopify, WooCommerce, etc.
                     progress.advance(task)
                     return (brand, result.has_ecommerce)
                 except Exception as e:
@@ -436,18 +440,141 @@ class Pipeline:
         else:
             return "Other"
 
-    async def stage_4_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
-        """Enrich brands with LinkedIn data."""
-        self._show_stage_header(4, "LinkedIn Enrichment", "Finding company pages and executive contacts")
+    async def stage_4_enrich(self, brands: list[BrandGroup]) -> list[dict]:
+        """Enrich brands with contact data using configured provider."""
+        provider = settings.enrichment.provider
+        self._show_stage_header(4, f"Contact Enrichment ({provider.title()})", "Finding company pages and executive contacts")
 
         if not brands:
             console.print("  [yellow]⚠ No brands to enrich[/yellow]")
             return []
 
+        # Select enricher based on config
+        if provider == "apollo":
+            if not settings.apollo_api_key:
+                console.print("  [red]✗ APOLLO_API_KEY not set in .env[/red]")
+                console.print("  [dim]  Get your key at: https://app.apollo.io/[/dim]")
+                console.print("  [dim]  Or set enrichment.provider = \"linkedin\" in config/cities.json[/dim]")
+                return []
+            return await self._enrich_with_apollo(brands)
+        else:
+            return await self._enrich_with_linkedin(brands)
+
+    async def _enrich_with_apollo(self, brands: list[BrandGroup]) -> list[dict]:
+        """Enrich using Apollo.io API."""
+        enricher = ApolloEnricher(api_key=settings.apollo_api_key)
+        enriched = []
+        max_contacts = settings.enrichment.max_contacts
+
+        # Track statistics
+        stats = {
+            "companies_found": 0,
+            "total_contacts": 0,
+            "with_email": 0,
+            "with_phone": 0,
+        }
+
+        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via Apollo.io[/dim]")
+        console.print(f"  [dim]• Looking for: CEO, COO, Founder, Owner, Operations Manager[/dim]")
+        console.print()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Enriching...", total=len(brands))
+
+            for brand in brands:
+                brand_name = brand.normalized_name.title()
+                progress.update(task, description=f"[cyan]Searching[/cyan] {brand_name}")
+
+                try:
+                    result = await enricher.enrich(brand.normalized_name, brand.website or "", max_contacts)
+
+                    if result:
+                        # Track stats
+                        if result.company.linkedin_url:
+                            stats["companies_found"] += 1
+
+                        row = {
+                            "brand_name": brand_name,
+                            "location_count": brand.location_count,
+                            "website": brand.website,
+                            "has_ecommerce": True,
+                            "ecommerce_platform": brand.ecommerce_platform or "",
+                            "marketplaces": ", ".join(brand.marketplaces),
+                            "priority": brand.priority,
+                            "cities": ", ".join(brand.cities[:5]),
+                            "linkedin_company": result.company.linkedin_url or "",
+                            "employee_count": result.company.employee_count or "",
+                            "industry": result.company.industry or "",
+                        }
+
+                        # Add contacts
+                        for i in range(4):
+                            if i < len(result.contacts):
+                                contact = result.contacts[i]
+                                row[f"contact_{i+1}_name"] = contact.name
+                                row[f"contact_{i+1}_title"] = contact.title
+                                row[f"contact_{i+1}_email"] = contact.email or ""
+                                row[f"contact_{i+1}_phone"] = contact.phone or ""
+                                row[f"contact_{i+1}_linkedin"] = contact.linkedin_url or ""
+                                stats["total_contacts"] += 1
+                                if contact.email:
+                                    stats["with_email"] += 1
+                                if contact.phone:
+                                    stats["with_phone"] += 1
+                            else:
+                                row[f"contact_{i+1}_name"] = ""
+                                row[f"contact_{i+1}_title"] = ""
+                                row[f"contact_{i+1}_email"] = ""
+                                row[f"contact_{i+1}_phone"] = ""
+                                row[f"contact_{i+1}_linkedin"] = ""
+
+                        enriched.append(row)
+
+                        # Status message
+                        contact_count = len(result.contacts)
+                        if contact_count > 0:
+                            progress.update(task, description=f"[green]✓[/green] {brand_name}: {contact_count} contacts found")
+                        else:
+                            progress.update(task, description=f"[yellow]○[/yellow] {brand_name}: No contacts found")
+
+                    await asyncio.sleep(0.5)  # Rate limiting
+                except Exception as e:
+                    error_msg = str(e)
+                    if "credits" in error_msg.lower():
+                        console.print(f"\n  [red]✗ Apollo credits exhausted. Stopping enrichment.[/red]")
+                        console.print(f"  [dim]  Add credits at: https://app.apollo.io/settings/credits[/dim]")
+                        break
+                    console.print(f"  [red]✗ Error enriching {brand_name}: {e}[/red]")
+
+                progress.advance(task)
+
+        # Summary
+        console.print()
+        table = Table(title="Apollo Enrichment Results", box=box.SIMPLE)
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Brands enriched", str(len(enriched)))
+        table.add_row("LinkedIn company pages", str(stats["companies_found"]))
+        table.add_row("─" * 25, "─" * 5)
+        table.add_row("Total contacts", f"[bold]{stats['total_contacts']}[/bold]")
+        table.add_row("  └ With email", f"[bold cyan]{stats['with_email']}[/bold cyan]")
+        table.add_row("  └ With phone", str(stats["with_phone"]))
+        console.print(table)
+
+        return enriched
+
+    async def _enrich_with_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
+        """Enrich using LinkedIn scraping (legacy fallback)."""
         enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
         enriched = []
 
-        # Track statistics
         stats = {
             "linkedin_pages_found": 0,
             "total_contacts": 0,
@@ -457,8 +584,9 @@ class Pipeline:
             "other": 0,
         }
 
-        console.print(f"  [dim]• Enriching {len(brands)} qualified leads[/dim]")
-        console.print(f"  [dim]• Looking for: CEO, COO, Founder, Owner, Operations Manager[/dim]")
+        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via LinkedIn scraping[/dim]")
+        console.print(f"  [yellow]⚠ Warning: LinkedIn scraping produces lower quality results[/yellow]")
+        console.print(f"  [dim]  Consider using Apollo.io for verified contacts[/dim]")
         console.print()
 
         with Progress(
@@ -478,11 +606,9 @@ class Pipeline:
                 try:
                     result = await enricher.enrich(brand.normalized_name, brand.website or "")
 
-                    # Track what we found
                     if result.linkedin_company_url:
                         stats["linkedin_pages_found"] += 1
 
-                    # Categorize contacts found
                     contact_types = []
                     for contact in result.contacts:
                         category = self._categorize_contact(contact.title)
@@ -502,57 +628,54 @@ class Pipeline:
                         "location_count": brand.location_count,
                         "website": brand.website,
                         "has_ecommerce": True,
+                        "ecommerce_platform": brand.ecommerce_platform or "",
                         "marketplaces": ", ".join(brand.marketplaces),
                         "priority": brand.priority,
                         "cities": ", ".join(brand.cities[:5]),
                         "linkedin_company": result.linkedin_company_url or "",
+                        "employee_count": "",
+                        "industry": "",
                         "contact_1_name": result.contacts[0].name if len(result.contacts) > 0 else "",
                         "contact_1_title": result.contacts[0].title if len(result.contacts) > 0 else "",
+                        "contact_1_email": "",
+                        "contact_1_phone": "",
                         "contact_1_linkedin": result.contacts[0].linkedin_url if len(result.contacts) > 0 else "",
                         "contact_2_name": result.contacts[1].name if len(result.contacts) > 1 else "",
                         "contact_2_title": result.contacts[1].title if len(result.contacts) > 1 else "",
+                        "contact_2_email": "",
+                        "contact_2_phone": "",
                         "contact_2_linkedin": result.contacts[1].linkedin_url if len(result.contacts) > 1 else "",
                         "contact_3_name": result.contacts[2].name if len(result.contacts) > 2 else "",
                         "contact_3_title": result.contacts[2].title if len(result.contacts) > 2 else "",
+                        "contact_3_email": "",
+                        "contact_3_phone": "",
                         "contact_3_linkedin": result.contacts[2].linkedin_url if len(result.contacts) > 2 else "",
                         "contact_4_name": result.contacts[3].name if len(result.contacts) > 3 else "",
                         "contact_4_title": result.contacts[3].title if len(result.contacts) > 3 else "",
+                        "contact_4_email": "",
+                        "contact_4_phone": "",
                         "contact_4_linkedin": result.contacts[3].linkedin_url if len(result.contacts) > 3 else "",
                     })
 
-                    # Build status message with what we found
-                    found_parts = []
-                    if result.linkedin_company_url:
-                        found_parts.append("[blue]Company Page[/blue]")
                     if contact_types:
-                        type_summary = ", ".join(set(contact_types))
-                        found_parts.append(f"[magenta]{len(result.contacts)} contacts[/magenta] ({type_summary})")
-
-                    if found_parts:
-                        status = f"[green]✓[/green] {brand_name}: {' | '.join(found_parts)}"
+                        progress.update(task, description=f"[green]✓[/green] {brand_name}: {len(result.contacts)} contacts")
                     else:
-                        status = f"[yellow]○[/yellow] {brand_name}: No data found"
+                        progress.update(task, description=f"[yellow]○[/yellow] {brand_name}: No data found")
 
-                    progress.update(task, description=status)
-                    await asyncio.sleep(1.0)  # Rate limiting
+                    await asyncio.sleep(1.0)
                 except Exception as e:
                     console.print(f"  [red]✗ Error enriching {brand_name}: {e}[/red]")
 
                 progress.advance(task)
 
-        # Show detailed summary
+        # Summary
         console.print()
-        table = Table(title="Enrichment Results", box=box.SIMPLE)
+        table = Table(title="LinkedIn Enrichment Results", box=box.SIMPLE)
         table.add_column("Metric", style="cyan")
         table.add_column("Count", style="green", justify="right")
         table.add_row("Brands enriched", str(len(enriched)))
-        table.add_row("LinkedIn company pages found", str(stats["linkedin_pages_found"]))
-        table.add_row("─" * 25, "─" * 5)
-        table.add_row("Total contacts found", f"[bold]{stats['total_contacts']}[/bold]")
-        table.add_row("  └ C-Suite (CEO, Founder, Owner)", f"[bold cyan]{stats['c_suite']}[/bold cyan]")
-        table.add_row("  └ Executive (VP, Director)", str(stats["executive"]))
-        table.add_row("  └ Management (Manager)", str(stats["management"]))
-        table.add_row("  └ Other", str(stats["other"]))
+        table.add_row("LinkedIn pages found", str(stats["linkedin_pages_found"]))
+        table.add_row("Total contacts", f"[bold]{stats['total_contacts']}[/bold]")
         console.print(table)
 
         return enriched
@@ -707,9 +830,9 @@ class Pipeline:
         else:
             console.print(f"  [dim]⏭ Skipping Stage 3 (E-commerce) - loaded {len(ecommerce_brands)} e-commerce brands from checkpoint[/dim]")
 
-        # Stage 4: LinkedIn enrichment
+        # Stage 4: Contact enrichment (Apollo or LinkedIn)
         if start_stage < 4:
-            enriched = await self.stage_4_linkedin(ecommerce_brands)
+            enriched = await self.stage_4_enrich(ecommerce_brands)
             checkpoint.enriched = enriched
             checkpoint.stage = 4
             self._save_checkpoint(checkpoint)
