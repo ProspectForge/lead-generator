@@ -13,6 +13,9 @@ class EcommerceResult:
     indicators_found: list[str] = field(default_factory=list)
     platform: Optional[str] = None
     pages_checked: int = 0
+    marketplaces: list[str] = field(default_factory=list)
+    marketplace_links: dict[str, str] = field(default_factory=dict)
+    priority: str = "medium"  # "high" if marketplaces, "medium" otherwise
 
 class EcommerceChecker:
     FIRECRAWL_CRAWL_URL = "https://api.firecrawl.dev/v2/crawl"
