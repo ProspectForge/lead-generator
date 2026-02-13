@@ -14,6 +14,9 @@ class BrandGroup:
     cities: list[str] = field(default_factory=list)
     estimated_nationwide: Optional[int] = None  # Estimated total locations
     is_large_chain: bool = False  # Flag for chains that exceed our criteria
+    marketplaces: list[str] = field(default_factory=list)
+    marketplace_links: dict[str, str] = field(default_factory=dict)
+    priority: str = "medium"
 
 class BrandGrouper:
     # Common suffixes to strip for normalization

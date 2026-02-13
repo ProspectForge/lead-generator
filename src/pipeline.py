@@ -2,9 +2,10 @@
 import asyncio
 import json
 import pandas as pd
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 from rich.panel import Panel
@@ -20,16 +21,161 @@ from src.linkedin_enrich import LinkedInEnricher
 console = Console()
 
 
+@dataclass
+class Checkpoint:
+    """Stores pipeline state for resume capability."""
+    stage: int  # Last completed stage (0=none, 1=search, 2=group, 2.5=verify, 3=ecommerce, 4=linkedin)
+    verticals: list[str]
+    countries: list[str]
+    searched_cities: list[str] = field(default_factory=list)
+    places: list[dict] = field(default_factory=list)
+    brands: list[dict] = field(default_factory=list)  # Serialized BrandGroup
+    verified_brands: list[dict] = field(default_factory=list)
+    ecommerce_brands: list[dict] = field(default_factory=list)
+    enriched: list[dict] = field(default_factory=list)
+    timestamp: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Checkpoint":
+        return cls(**data)
+
+
 class Pipeline:
+    CHECKPOINT_DIR = "checkpoints"
+
     def __init__(self):
         self.data_dir = Path(__file__).parent.parent / "data"
         self.raw_dir = self.data_dir / "raw"
         self.processed_dir = self.data_dir / "processed"
         self.output_dir = self.data_dir / "output"
+        self.checkpoint_dir = self.data_dir / self.CHECKPOINT_DIR
+        self._current_checkpoint_path: Optional[Path] = None
 
         # Ensure directories exist
-        for d in [self.raw_dir, self.processed_dir, self.output_dir]:
+        for d in [self.raw_dir, self.processed_dir, self.output_dir, self.checkpoint_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+    def list_checkpoints(self) -> list[dict]:
+        """List all available checkpoints with summary info."""
+        checkpoints = []
+        stage_names = {
+            1: "Search",
+            2: "Grouping",
+            2.5: "Verification",
+            3: "E-commerce",
+            4: "LinkedIn",
+        }
+
+        for cp_file in sorted(self.checkpoint_dir.glob("checkpoint_*.json"), reverse=True):
+            try:
+                with open(cp_file, 'r') as f:
+                    data = json.load(f)
+                checkpoint = Checkpoint.from_dict(data)
+                checkpoints.append({
+                    "filename": cp_file.name,
+                    "path": cp_file,
+                    "stage": checkpoint.stage,
+                    "stage_name": stage_names.get(checkpoint.stage, f"Stage {checkpoint.stage}"),
+                    "verticals": checkpoint.verticals,
+                    "countries": checkpoint.countries,
+                    "timestamp": checkpoint.timestamp,
+                    "places_count": len(checkpoint.places),
+                    "brands_count": len(checkpoint.brands),
+                    "verified_count": len(checkpoint.verified_brands),
+                    "ecommerce_count": len(checkpoint.ecommerce_brands),
+                })
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+
+        return checkpoints
+
+    def has_checkpoints(self) -> bool:
+        """Check if any checkpoint files exist."""
+        return len(list(self.checkpoint_dir.glob("checkpoint_*.json"))) > 0
+
+    def load_checkpoint(self, checkpoint_path: Optional[Path] = None) -> Optional[Checkpoint]:
+        """Load checkpoint from a specific file or the most recent one."""
+        if checkpoint_path:
+            path = checkpoint_path
+        else:
+            # Load most recent checkpoint
+            checkpoints = list(self.checkpoint_dir.glob("checkpoint_*.json"))
+            if not checkpoints:
+                return None
+            path = max(checkpoints, key=lambda p: p.stat().st_mtime)
+
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            self._current_checkpoint_path = path
+            return Checkpoint.from_dict(data)
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            console.print(f"[yellow]⚠ Could not load checkpoint: {e}[/yellow]")
+            return None
+
+    def _save_checkpoint(self, checkpoint: Checkpoint):
+        """Save checkpoint to file."""
+        checkpoint.timestamp = datetime.now().isoformat()
+
+        # Use existing checkpoint path or create new one
+        if self._current_checkpoint_path:
+            path = self._current_checkpoint_path
+        else:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            path = self.checkpoint_dir / f"checkpoint_{timestamp}.json"
+            self._current_checkpoint_path = path
+
+        with open(path, 'w') as f:
+            json.dump(checkpoint.to_dict(), f, indent=2)
+
+    def clear_checkpoint(self, path: Optional[Path] = None):
+        """Remove checkpoint file after successful completion."""
+        if path:
+            if path.exists():
+                path.unlink()
+        elif self._current_checkpoint_path and self._current_checkpoint_path.exists():
+            self._current_checkpoint_path.unlink()
+            self._current_checkpoint_path = None
+
+    def delete_checkpoint(self, checkpoint_path: Path):
+        """Delete a specific checkpoint."""
+        if checkpoint_path.exists():
+            checkpoint_path.unlink()
+
+    def _serialize_brand(self, brand: BrandGroup) -> dict:
+        """Serialize a BrandGroup to dict for checkpoint."""
+        return {
+            "normalized_name": brand.normalized_name,
+            "original_names": brand.original_names,
+            "location_count": brand.location_count,
+            "locations": brand.locations,
+            "website": brand.website,
+            "cities": brand.cities,
+            "estimated_nationwide": brand.estimated_nationwide,
+            "is_large_chain": brand.is_large_chain,
+            "marketplaces": brand.marketplaces,
+            "marketplace_links": brand.marketplace_links,
+            "priority": brand.priority,
+        }
+
+    def _deserialize_brand(self, data: dict) -> BrandGroup:
+        """Deserialize a dict to BrandGroup."""
+        return BrandGroup(
+            normalized_name=data["normalized_name"],
+            original_names=data.get("original_names", []),
+            location_count=data.get("location_count", 0),
+            locations=data.get("locations", []),
+            website=data.get("website"),
+            cities=data.get("cities", []),
+            estimated_nationwide=data.get("estimated_nationwide"),
+            is_large_chain=data.get("is_large_chain", False),
+            marketplaces=data.get("marketplaces", []),
+            marketplace_links=data.get("marketplace_links", {}),
+            priority=data.get("priority", "medium"),
+        )
 
     def _show_stage_header(self, stage_num: int, title: str, description: str):
         """Display a formatted stage header."""
@@ -42,25 +188,49 @@ class Pipeline:
         ))
 
     async def stage_1_search(self, verticals: list[str], countries: list[str]) -> list[dict]:
-        """Search Google Places for businesses."""
+        """Search Google Places for businesses (parallel)."""
         self._show_stage_header(1, "Google Places Search", "Finding retail businesses across cities")
 
         searcher = PlacesSearcher(api_key=settings.google_places_api_key)
-        all_results = []
+        concurrency = settings.search_concurrency
+        semaphore = asyncio.Semaphore(concurrency)
 
         cities = []
         for country in countries:
             cities.extend(settings.cities.get(country, []))
 
-        # Build queries with their verticals
-        query_vertical_pairs = []
+        # Build all search tasks: (city, query, vertical)
+        search_tasks = []
         for vertical in verticals:
             for query in settings.search_queries.get(vertical, []):
-                query_vertical_pairs.append((query, vertical))
+                for city in cities:
+                    search_tasks.append((city, query, vertical))
 
-        total_searches = len(cities) * len(query_vertical_pairs)
-        console.print(f"  [dim]• {len(cities)} cities × {len(query_vertical_pairs)} queries = {total_searches} searches[/dim]")
+        total_searches = len(search_tasks)
+        console.print(f"  [dim]• {len(cities)} cities × {len(set((q, v) for _, q, v in search_tasks))} queries = {total_searches} searches ({concurrency} parallel)[/dim]")
         console.print()
+
+        async def do_search(city: str, query: str, vertical: str, progress, task) -> list[dict]:
+            """Execute a single search with semaphore for rate limiting."""
+            async with semaphore:
+                try:
+                    results = await searcher.search(query, city, vertical=vertical)
+                    progress.advance(task)
+                    return [
+                        {
+                            "name": r.name,
+                            "address": r.address,
+                            "website": r.website,
+                            "place_id": r.place_id,
+                            "city": r.city,
+                            "vertical": r.vertical
+                        }
+                        for r in results
+                    ]
+                except Exception as e:
+                    console.print(f"  [red]✗ Error: {query} in {city}: {e}[/red]")
+                    progress.advance(task)
+                    return []
 
         with Progress(
             SpinnerColumn(),
@@ -70,31 +240,14 @@ class Pipeline:
             TimeElapsedColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("[cyan]Searching...", total=total_searches)
-            search_count = 0
-            found_count = 0
+            task = progress.add_task(f"[cyan]Searching {total_searches} locations...", total=total_searches)
 
-            for city in cities:
-                for query, vertical in query_vertical_pairs:
-                    progress.update(task, description=f"[cyan]{city}[/cyan] → {query}")
-                    try:
-                        results = await searcher.search(query, city, vertical=vertical)
-                        for r in results:
-                            all_results.append({
-                                "name": r.name,
-                                "address": r.address,
-                                "website": r.website,
-                                "place_id": r.place_id,
-                                "city": r.city,
-                                "vertical": r.vertical
-                            })
-                        found_count += len(results)
-                        await asyncio.sleep(0.1)  # Rate limiting
-                    except Exception as e:
-                        console.print(f"  [red]✗ Error: {query} in {city}: {e}[/red]")
+            # Run all searches in parallel (limited by semaphore)
+            coros = [do_search(city, query, vertical, progress, task) for city, query, vertical in search_tasks]
+            results_lists = await asyncio.gather(*coros)
 
-                    search_count += 1
-                    progress.update(task, advance=1)
+        # Flatten results
+        all_results = [place for result_list in results_lists for place in result_list]
 
         # Save raw results
         raw_file = self.raw_dir / f"places_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -131,79 +284,50 @@ class Pipeline:
 
         return filtered
 
-    async def stage_2b_verify_chain_size(self, brands: list[BrandGroup], searched_cities: list[str]) -> list[BrandGroup]:
-        """Verify brands aren't large nationwide chains by checking additional cities."""
+    def stage_2b_verify_chain_size(self, brands: list[BrandGroup], searched_cities: list[str]) -> list[BrandGroup]:
+        """Filter out large nationwide chains using heuristics (no API calls)."""
         self._show_stage_header("2b", "Chain Size Verification", "Filtering out large nationwide chains")
 
         if not brands:
             console.print("  [yellow]⚠ No brands to verify[/yellow]")
             return []
 
-        # Test cities NOT in our main search to detect nationwide presence
-        test_cities = [
-            "Albuquerque, NM",
-            "Tucson, AZ",
-            "Omaha, NE",
-            "Boise, ID",
-            "Richmond, VA",
-            "Knoxville, TN",
-            "Des Moines, IA",
-            "Spokane, WA",
-        ]
-        # Remove any test cities that were in our search
-        test_cities = [c for c in test_cities if c not in searched_cities][:5]
-
-        if not test_cities:
-            console.print("  [yellow]⚠ No test cities available, skipping verification[/yellow]")
-            return brands
-
-        searcher = PlacesSearcher(api_key=settings.google_places_api_key)
+        max_cities = settings.chain_filter_max_cities
+        known_chains = settings.known_large_chains
+        total_searched = len(searched_cities)
         verified_brands = []
         large_chains_found = 0
+        known_chains_found = 0
 
-        console.print(f"  [dim]• Testing {len(brands)} brands in {len(test_cities)} additional cities[/dim]")
-        console.print(f"  [dim]• Brands found in 3+ test cities are likely large chains[/dim]")
+        console.print(f"  [dim]• Analyzing {len(brands)} brands[/dim]")
+        console.print(f"  [dim]• Filtering brands found in {max_cities}+ cities (of {total_searched} searched)[/dim]")
+        console.print(f"  [dim]• Also filtering {len(known_chains)} known large chains (from config)[/dim]")
         console.print()
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]Verifying...", total=len(brands))
+        for brand in brands:
+            brand_name = brand.normalized_name.title()
+            num_cities = len(brand.cities)
 
-            for brand in brands:
-                brand_name = brand.normalized_name.title()
-                progress.update(task, description=f"[cyan]Checking[/cyan] {brand_name}")
+            # Check 1: Known large chain list (from config)
+            if brand.normalized_name.lower() in known_chains:
+                brand.is_large_chain = True
+                brand.estimated_nationwide = 500  # Rough estimate for known chains
+                known_chains_found += 1
+                console.print(f"  [red]✗ Known chain:[/red] {brand_name}")
+                continue
 
-                # Search for this brand in test cities
-                found_in_cities = 0
-                for test_city in test_cities:
-                    try:
-                        results = await searcher.search(brand_name, test_city)
-                        # Check if any result matches this brand
-                        for r in results:
-                            if brand.normalized_name.lower() in r.name.lower():
-                                found_in_cities += 1
-                                break
-                        await asyncio.sleep(0.1)
-                    except Exception:
-                        pass
+            # Check 2: Found in too many cities (likely national)
+            if num_cities >= max_cities:
+                brand.is_large_chain = True
+                # Estimate: if found in 8 of 50 cities, extrapolate to ~80+ nationwide
+                brand.estimated_nationwide = int(brand.location_count * (50 / num_cities) * 1.5)
+                large_chains_found += 1
+                console.print(f"  [red]✗ Large chain:[/red] {brand_name} (found in {num_cities} cities)")
+                continue
 
-                # If found in 3+ additional cities, likely a large chain
-                if found_in_cities >= 3:
-                    brand.is_large_chain = True
-                    brand.estimated_nationwide = brand.location_count + (found_in_cities * 10)  # Rough estimate
-                    large_chains_found += 1
-                    progress.update(task, description=f"[red]✗ Large chain[/red] {brand_name} (found in {found_in_cities} test cities)")
-                else:
-                    verified_brands.append(brand)
-                    progress.update(task, description=f"[green]✓ Verified[/green] {brand_name}")
-
-                progress.advance(task)
+            # Passed both checks
+            verified_brands.append(brand)
+            console.print(f"  [green]✓ Regional:[/green] {brand_name} ({num_cities} cities, {brand.location_count} locations)")
 
         # Summary
         console.print()
@@ -211,25 +335,53 @@ class Pipeline:
         table.add_column("Status", style="cyan")
         table.add_column("Count", style="green", justify="right")
         table.add_row("Verified (true regional chains)", f"[bold green]{len(verified_brands)}[/bold green]")
-        table.add_row("Excluded (large nationwide chains)", f"[bold red]{large_chains_found}[/bold red]")
+        table.add_row("Known large chains filtered", f"[bold red]{known_chains_found}[/bold red]")
+        table.add_row("Multi-city chains filtered", f"[bold red]{large_chains_found}[/bold red]")
         console.print(table)
 
         return verified_brands
 
     async def stage_3_ecommerce(self, brands: list[BrandGroup]) -> list[BrandGroup]:
-        """Check each brand for e-commerce presence."""
+        """Check each brand for e-commerce presence (parallel)."""
         self._show_stage_header(3, "E-commerce Detection", "Checking websites for online store presence")
 
         if not brands:
             console.print("  [yellow]⚠ No brands to check[/yellow]")
             return []
 
-        checker = EcommerceChecker(api_key=settings.firecrawl_api_key)
-        ecommerce_brands = []
+        concurrency = settings.ecommerce_concurrency
+        checker = EcommerceChecker(
+            api_key=settings.firecrawl_api_key,
+            pages_to_check=settings.ecommerce_pages_to_check
+        )
+        semaphore = asyncio.Semaphore(concurrency)
+        results: dict[str, tuple[BrandGroup, bool]] = {}  # brand_name -> (brand, has_ecommerce)
         skipped = 0
 
-        console.print(f"  [dim]• Checking {len(brands)} brand websites[/dim]")
+        # Filter brands with websites
+        brands_with_website = [b for b in brands if b.website]
+        skipped = len(brands) - len(brands_with_website)
+
+        console.print(f"  [dim]• Checking {len(brands_with_website)} brand websites ({concurrency} parallel)[/dim]")
+        if skipped > 0:
+            console.print(f"  [dim]• Skipping {skipped} brands without websites[/dim]")
         console.print()
+
+        async def check_brand(brand: BrandGroup, progress, task) -> tuple[BrandGroup, bool]:
+            """Check a single brand with semaphore for rate limiting."""
+            async with semaphore:
+                try:
+                    result = await checker.check(brand.website)
+                    # Attach marketplace data to brand
+                    brand.marketplaces = result.marketplaces
+                    brand.marketplace_links = result.marketplace_links
+                    brand.priority = result.priority
+                    progress.advance(task)
+                    return (brand, result.has_ecommerce)
+                except Exception as e:
+                    console.print(f"  [red]✗ Error: {brand.normalized_name.title()}: {e}[/red]")
+                    progress.advance(task)
+                    return (brand, False)
 
         with Progress(
             SpinnerColumn(),
@@ -239,29 +391,15 @@ class Pipeline:
             TimeElapsedColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("[cyan]Checking...", total=len(brands))
+            task = progress.add_task(f"[cyan]Checking {len(brands_with_website)} websites...", total=len(brands_with_website))
 
-            for brand in brands:
-                if not brand.website:
-                    progress.update(task, description=f"[yellow]Skipped[/yellow] {brand.normalized_name.title()} (no website)")
-                    skipped += 1
-                    progress.advance(task)
-                    continue
+            # Run all checks in parallel (limited by semaphore)
+            tasks = [check_brand(brand, progress, task) for brand in brands_with_website]
+            check_results = await asyncio.gather(*tasks)
 
-                progress.update(task, description=f"[cyan]Checking[/cyan] {brand.normalized_name.title()}")
-
-                try:
-                    result = await checker.check(brand.website)
-                    if result.has_ecommerce:
-                        ecommerce_brands.append(brand)
-                        progress.update(task, description=f"[green]✓ E-commerce[/green] {brand.normalized_name.title()}")
-                    else:
-                        progress.update(task, description=f"[dim]✗ No e-commerce[/dim] {brand.normalized_name.title()}")
-                    await asyncio.sleep(0.5)  # Rate limiting
-                except Exception as e:
-                    console.print(f"  [red]✗ Error checking {brand.website}: {e}[/red]")
-
-                progress.advance(task)
+        # Collect results
+        ecommerce_brands = [brand for brand, has_ecom in check_results if has_ecom]
+        no_ecommerce_count = len(brands_with_website) - len(ecommerce_brands)
 
         # Summary
         console.print()
@@ -269,7 +407,7 @@ class Pipeline:
         table.add_column("Status", style="cyan")
         table.add_column("Count", style="green", justify="right")
         table.add_row("With e-commerce", f"[bold green]{len(ecommerce_brands)}[/bold green]")
-        table.add_row("Without e-commerce", str(len(brands) - len(ecommerce_brands) - skipped))
+        table.add_row("Without e-commerce", str(no_ecommerce_count))
         table.add_row("Skipped (no website)", str(skipped))
         console.print(table)
 
@@ -355,6 +493,8 @@ class Pipeline:
                         "location_count": brand.location_count,
                         "website": brand.website,
                         "has_ecommerce": True,
+                        "marketplaces": ", ".join(brand.marketplaces),
+                        "priority": brand.priority,
                         "cities": ", ".join(brand.cities[:5]),
                         "linkedin_company": result.linkedin_company_url or "",
                         "contact_1_name": result.contacts[0].name if len(result.contacts) > 0 else "",
@@ -420,6 +560,14 @@ class Pipeline:
 
         with console.status("[cyan]Writing CSV...[/cyan]"):
             df = pd.DataFrame(data)
+
+            # Sort: high priority first, then by location count descending
+            if 'priority' in df.columns:
+                priority_order = {'high': 0, 'medium': 1}
+                df['_priority_sort'] = df['priority'].map(priority_order)
+                df = df.sort_values(by=['_priority_sort', 'location_count'], ascending=[True, False])
+                df = df.drop(columns=['_priority_sort'])
+
             output_file = self.output_dir / f"leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             df.to_csv(output_file, index=False)
 
@@ -452,42 +600,118 @@ class Pipeline:
     async def run(
         self,
         verticals: list[str] = ["health_wellness", "sporting_goods", "apparel"],
-        countries: list[str] = ["us", "canada"]
+        countries: list[str] = ["us", "canada"],
+        resume_checkpoint: Optional[Path] = None
     ) -> str:
-        """Run the full pipeline."""
+        """Run the full pipeline, optionally resuming from a checkpoint."""
         start_time = datetime.now()
 
-        console.print()
-        console.print(Panel(
-            "[bold]Pipeline Starting[/bold]\n\n"
-            f"Verticals: {', '.join(verticals)}\n"
-            f"Countries: {', '.join(countries)}",
-            title="[bold blue]🚀 Lead Generator[/bold blue]",
-            border_style="blue",
-        ))
+        # Initialize checkpoint or load existing
+        checkpoint: Optional[Checkpoint] = None
+        start_stage = 0
+
+        if resume_checkpoint:
+            checkpoint = self.load_checkpoint(resume_checkpoint)
+            if checkpoint:
+                start_stage = checkpoint.stage
+                verticals = checkpoint.verticals
+                countries = checkpoint.countries
+                console.print()
+                console.print(Panel(
+                    f"[bold yellow]Resuming Pipeline[/bold yellow]\n\n"
+                    f"Last completed: Stage {checkpoint.stage}\n"
+                    f"Verticals: {', '.join(verticals)}\n"
+                    f"Countries: {', '.join(countries)}\n"
+                    f"Saved at: {checkpoint.timestamp}",
+                    title="[bold yellow]⏯ Resuming[/bold yellow]",
+                    border_style="yellow",
+                ))
+        else:
+            # Fresh run - create new checkpoint
+            checkpoint = Checkpoint(
+                stage=0,
+                verticals=verticals,
+                countries=countries,
+            )
+            console.print()
+            console.print(Panel(
+                "[bold]Pipeline Starting[/bold]\n\n"
+                f"Verticals: {', '.join(verticals)}\n"
+                f"Countries: {', '.join(countries)}",
+                title="[bold blue]🚀 Lead Generator[/bold blue]",
+                border_style="blue",
+            ))
+
+        # Initialize data from checkpoint or empty
+        places = checkpoint.places if checkpoint and start_stage >= 1 else []
+        searched_cities = checkpoint.searched_cities if checkpoint else []
+        brands = [self._deserialize_brand(b) for b in checkpoint.brands] if checkpoint and start_stage >= 2 else []
+        verified_brands = [self._deserialize_brand(b) for b in checkpoint.verified_brands] if checkpoint and start_stage >= 2.5 else []
+        ecommerce_brands = [self._deserialize_brand(b) for b in checkpoint.ecommerce_brands] if checkpoint and start_stage >= 3 else []
+        enriched = checkpoint.enriched if checkpoint and start_stage >= 4 else []
 
         # Stage 1: Search
-        places = await self.stage_1_search(verticals, countries)
-
-        # Get list of cities we searched (for chain verification)
-        searched_cities = []
-        for country in countries:
-            searched_cities.extend(settings.cities.get(country, []))
+        if start_stage < 1:
+            places = await self.stage_1_search(verticals, countries)
+            searched_cities = []
+            for country in countries:
+                searched_cities.extend(settings.cities.get(country, []))
+            checkpoint.places = places
+            checkpoint.searched_cities = searched_cities
+            checkpoint.stage = 1
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 1 complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 1 (Search) - loaded {len(places)} places from checkpoint[/dim]")
+            if not searched_cities:
+                for country in countries:
+                    searched_cities.extend(settings.cities.get(country, []))
 
         # Stage 2: Group and filter
-        brands = self.stage_2_group(places)
+        if start_stage < 2:
+            brands = self.stage_2_group(places)
+            checkpoint.brands = [self._serialize_brand(b) for b in brands]
+            checkpoint.stage = 2
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 2 complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 2 (Grouping) - loaded {len(brands)} brands from checkpoint[/dim]")
 
         # Stage 2b: Verify chain sizes (filter out large nationwide chains)
-        verified_brands = await self.stage_2b_verify_chain_size(brands, searched_cities)
+        if start_stage < 2.5:
+            verified_brands = self.stage_2b_verify_chain_size(brands, searched_cities)
+            checkpoint.verified_brands = [self._serialize_brand(b) for b in verified_brands]
+            checkpoint.stage = 2.5
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 2b complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 2b (Verification) - loaded {len(verified_brands)} verified brands from checkpoint[/dim]")
 
         # Stage 3: E-commerce check
-        ecommerce_brands = await self.stage_3_ecommerce(verified_brands)
+        if start_stage < 3:
+            ecommerce_brands = await self.stage_3_ecommerce(verified_brands)
+            checkpoint.ecommerce_brands = [self._serialize_brand(b) for b in ecommerce_brands]
+            checkpoint.stage = 3
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 3 complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 3 (E-commerce) - loaded {len(ecommerce_brands)} e-commerce brands from checkpoint[/dim]")
 
         # Stage 4: LinkedIn enrichment
-        enriched = await self.stage_4_linkedin(ecommerce_brands)
+        if start_stage < 4:
+            enriched = await self.stage_4_linkedin(ecommerce_brands)
+            checkpoint.enriched = enriched
+            checkpoint.stage = 4
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 4 (LinkedIn) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
 
         # Stage 5: Export
         output_file = self.stage_5_export(enriched)
+
+        # Clear checkpoint on successful completion
+        self.clear_checkpoint()
 
         # Final summary
         elapsed = datetime.now() - start_time
