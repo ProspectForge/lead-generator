@@ -1,5 +1,7 @@
 # src/__main__.py
 import asyncio
+import signal
+import sys
 import typer
 from typing import Optional
 from rich.console import Console
@@ -14,6 +16,32 @@ from src.config import settings
 
 app = typer.Typer(help="Lead Generator - Find omnichannel retail leads")
 console = Console()
+
+# Track if we're in the middle of a pipeline run
+_pipeline_running = False
+
+
+def handle_interrupt(signum, frame):
+    """Handle Ctrl+C gracefully."""
+    global _pipeline_running
+
+    console.print("\n")
+
+    if _pipeline_running:
+        console.print("[yellow]⚠ Pipeline interrupted![/yellow]")
+        if Confirm.ask("[yellow]Do you want to exit?[/yellow]", default=False):
+            console.print("[red]Exiting...[/red]")
+            sys.exit(1)
+        else:
+            console.print("[green]Continuing...[/green]")
+            return
+    else:
+        console.print("[yellow]Exiting...[/yellow]")
+        sys.exit(0)
+
+
+# Register the signal handler
+signal.signal(signal.SIGINT, handle_interrupt)
 
 VERTICALS = {
     "health_wellness": "Health & Wellness (supplements, vitamins, nutrition)",
@@ -155,17 +183,28 @@ def run(
             raise typer.Exit(0)
 
     console.print()
-    pipeline = Pipeline()
-    output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list))
+    console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
-    # Final summary
-    console.print()
-    console.print(Panel(
-        f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
-        f"Output saved to:\n[cyan]{output_file}[/cyan]",
-        title="Success",
-        border_style="green",
-    ))
+    global _pipeline_running
+    _pipeline_running = True
+
+    try:
+        pipeline = Pipeline()
+        output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list))
+
+        # Final summary
+        console.print()
+        console.print(Panel(
+            f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
+            f"Output saved to:\n[cyan]{output_file}[/cyan]",
+            title="Success",
+            border_style="green",
+        ))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
+        raise typer.Exit(1)
+    finally:
+        _pipeline_running = False
 
 
 @app.command()
@@ -200,10 +239,20 @@ def search(
 
     console.print(f"\n[bold]Searching:[/bold] {VERTICALS.get(vertical, vertical)}")
     console.print(f"[bold]Country:[/bold] {COUNTRIES.get(country, country)}\n")
+    console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
-    pipeline = Pipeline()
-    results = asyncio.run(pipeline.stage_1_search([vertical], [country]))
-    console.print(f"\n[green]✓ Found {len(results)} places[/green]")
+    global _pipeline_running
+    _pipeline_running = True
+
+    try:
+        pipeline = Pipeline()
+        results = asyncio.run(pipeline.stage_1_search([vertical], [country]))
+        console.print(f"\n[green]✓ Found {len(results)} places[/green]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Search interrupted by user.[/yellow]")
+        raise typer.Exit(1)
+    finally:
+        _pipeline_running = False
 
 
 if __name__ == "__main__":
