@@ -8,7 +8,6 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from InquirerPy import inquirer
-from InquirerPy.separator import Separator
 
 from src.pipeline import Pipeline
 
@@ -92,11 +91,10 @@ def run(
         vertical_choices = inquirer.checkbox(
             message="Select verticals (Space to toggle, Enter to confirm):",
             choices=[
-                {"name": VERTICALS["health_wellness"], "value": "health_wellness"},
-                {"name": VERTICALS["sporting_goods"], "value": "sporting_goods"},
-                {"name": VERTICALS["apparel"], "value": "apparel"},
+                {"name": VERTICALS["health_wellness"], "value": "health_wellness", "enabled": True},
+                {"name": VERTICALS["sporting_goods"], "value": "sporting_goods", "enabled": True},
+                {"name": VERTICALS["apparel"], "value": "apparel", "enabled": True},
             ],
-            default=["health_wellness", "sporting_goods", "apparel"],
             instruction="(Use arrow keys and space to select)",
         ).execute()
 
@@ -112,10 +110,9 @@ def run(
         country_choices = inquirer.checkbox(
             message="Select countries (Space to toggle, Enter to confirm):",
             choices=[
-                {"name": COUNTRIES["us"], "value": "us"},
-                {"name": COUNTRIES["canada"], "value": "canada"},
+                {"name": COUNTRIES["us"], "value": "us", "enabled": True},
+                {"name": COUNTRIES["canada"], "value": "canada", "enabled": True},
             ],
-            default=["us", "canada"],
             instruction="(Use arrow keys and space to select)",
         ).execute()
 
