@@ -275,6 +275,20 @@ class Pipeline:
 
         return ecommerce_brands
 
+    def _categorize_contact(self, title: str) -> str:
+        """Categorize a contact by their title."""
+        title_lower = title.lower()
+        if any(t in title_lower for t in ["ceo", "chief executive", "founder", "owner", "president"]):
+            return "C-Suite"
+        elif any(t in title_lower for t in ["coo", "chief operating", "cfo", "chief financial", "cto"]):
+            return "C-Suite"
+        elif any(t in title_lower for t in ["vp", "vice president", "director"]):
+            return "Executive"
+        elif any(t in title_lower for t in ["manager", "head of"]):
+            return "Management"
+        else:
+            return "Other"
+
     async def stage_4_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
         """Enrich brands with LinkedIn data."""
         self._show_stage_header(4, "LinkedIn Enrichment", "Finding company pages and executive contacts")
@@ -286,7 +300,18 @@ class Pipeline:
         enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
         enriched = []
 
+        # Track statistics
+        stats = {
+            "linkedin_pages_found": 0,
+            "total_contacts": 0,
+            "c_suite": 0,
+            "executive": 0,
+            "management": 0,
+            "other": 0,
+        }
+
         console.print(f"  [dim]• Enriching {len(brands)} qualified leads[/dim]")
+        console.print(f"  [dim]• Looking for: CEO, COO, Founder, Owner, Operations Manager[/dim]")
         console.print()
 
         with Progress(
@@ -301,13 +326,29 @@ class Pipeline:
 
             for brand in brands:
                 brand_name = brand.normalized_name.title()
-                progress.update(task, description=f"[cyan]Enriching[/cyan] {brand_name}")
+                progress.update(task, description=f"[cyan]Searching[/cyan] {brand_name}")
 
                 try:
                     result = await enricher.enrich(brand.normalized_name, brand.website or "")
 
-                    contacts_found = len(result.contacts)
-                    linkedin_found = "✓" if result.linkedin_company_url else "✗"
+                    # Track what we found
+                    if result.linkedin_company_url:
+                        stats["linkedin_pages_found"] += 1
+
+                    # Categorize contacts found
+                    contact_types = []
+                    for contact in result.contacts:
+                        category = self._categorize_contact(contact.title)
+                        contact_types.append(category)
+                        stats["total_contacts"] += 1
+                        if category == "C-Suite":
+                            stats["c_suite"] += 1
+                        elif category == "Executive":
+                            stats["executive"] += 1
+                        elif category == "Management":
+                            stats["management"] += 1
+                        else:
+                            stats["other"] += 1
 
                     enriched.append({
                         "brand_name": brand_name,
@@ -330,14 +371,41 @@ class Pipeline:
                         "contact_4_linkedin": result.contacts[3].linkedin_url if len(result.contacts) > 3 else "",
                     })
 
-                    progress.update(task, description=f"[green]✓[/green] {brand_name} [dim](LinkedIn: {linkedin_found}, Contacts: {contacts_found})[/dim]")
+                    # Build status message with what we found
+                    found_parts = []
+                    if result.linkedin_company_url:
+                        found_parts.append("[blue]Company Page[/blue]")
+                    if contact_types:
+                        type_summary = ", ".join(set(contact_types))
+                        found_parts.append(f"[magenta]{len(result.contacts)} contacts[/magenta] ({type_summary})")
+
+                    if found_parts:
+                        status = f"[green]✓[/green] {brand_name}: {' | '.join(found_parts)}"
+                    else:
+                        status = f"[yellow]○[/yellow] {brand_name}: No data found"
+
+                    progress.update(task, description=status)
                     await asyncio.sleep(1.0)  # Rate limiting
                 except Exception as e:
                     console.print(f"  [red]✗ Error enriching {brand_name}: {e}[/red]")
 
                 progress.advance(task)
 
-        console.print(f"\n  [green]✓ Enriched {len(enriched)} leads[/green]")
+        # Show detailed summary
+        console.print()
+        table = Table(title="Enrichment Results", box=box.SIMPLE)
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Brands enriched", str(len(enriched)))
+        table.add_row("LinkedIn company pages found", str(stats["linkedin_pages_found"]))
+        table.add_row("─" * 25, "─" * 5)
+        table.add_row("Total contacts found", f"[bold]{stats['total_contacts']}[/bold]")
+        table.add_row("  └ C-Suite (CEO, Founder, Owner)", f"[bold cyan]{stats['c_suite']}[/bold cyan]")
+        table.add_row("  └ Executive (VP, Director)", str(stats["executive"]))
+        table.add_row("  └ Management (Manager)", str(stats["management"]))
+        table.add_row("  └ Other", str(stats["other"]))
+        console.print(table)
+
         return enriched
 
     def stage_5_export(self, data: list[dict]) -> str:
