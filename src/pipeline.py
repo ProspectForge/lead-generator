@@ -36,14 +36,16 @@ class Pipeline:
         for country in countries:
             cities.extend(settings.cities.get(country, []))
 
-        queries = []
+        # Build queries with their verticals to track which query belongs to which vertical
+        query_vertical_pairs = []
         for vertical in verticals:
-            queries.extend(settings.search_queries.get(vertical, []))
+            for query in settings.search_queries.get(vertical, []):
+                query_vertical_pairs.append((query, vertical))
 
-        console.print(f"[bold]Stage 1:[/bold] Searching {len(cities)} cities x {len(queries)} queries")
+        console.print(f"[bold]Stage 1:[/bold] Searching {len(cities)} cities x {len(query_vertical_pairs)} queries")
 
         for city in cities:
-            for query in queries:
+            for query, vertical in query_vertical_pairs:
                 try:
                     results = await searcher.search(query, city, vertical=vertical)
                     for r in results:
