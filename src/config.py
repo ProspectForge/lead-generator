@@ -17,10 +17,19 @@ class LLMSettings:
 
 
 @dataclass
+class EnrichmentSettings:
+    """Settings for lead enrichment providers."""
+    enabled: bool = True
+    provider: str = "linkedin"  # "linkedin" (free/scraping) or "apollo" (paid)
+    max_contacts: int = 4
+
+
+@dataclass
 class Settings:
     google_places_api_key: str = ""
     firecrawl_api_key: str = ""
     openai_api_key: str = ""
+    apollo_api_key: str = ""
     cities: dict = field(default_factory=dict)
     search_queries: dict = field(default_factory=dict)
     known_large_chains: set = field(default_factory=set)
@@ -29,11 +38,13 @@ class Settings:
     ecommerce_pages_to_check: int = 3
     search_concurrency: int = 10
     llm: LLMSettings = field(default_factory=LLMSettings)
+    enrichment: EnrichmentSettings = field(default_factory=EnrichmentSettings)
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self.apollo_api_key = os.getenv("APOLLO_API_KEY", "")
 
         config_path = Path(__file__).parent.parent / "config" / "cities.json"
         with open(config_path) as f:
@@ -56,6 +67,14 @@ class Settings:
             enabled=llm_config.get("enabled", False),
             provider=llm_config.get("provider", "openai"),
             model=llm_config.get("model", "gpt-4o-mini")
+        )
+
+        # Load enrichment settings
+        enrichment_config = config.get("enrichment", {})
+        self.enrichment = EnrichmentSettings(
+            enabled=enrichment_config.get("enabled", True),
+            provider=enrichment_config.get("provider", "linkedin"),
+            max_contacts=enrichment_config.get("max_contacts", 4)
         )
 
     def get_all_city_names(self) -> list[str]:

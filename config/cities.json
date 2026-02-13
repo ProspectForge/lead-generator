@@ -280,5 +280,10 @@
     "enabled": true,
     "provider": "openai",
     "model": "gpt-4o-mini"
+  },
+  "enrichment": {
+    "enabled": true,
+    "provider": "linkedin",
+    "max_contacts": 4
   }
 }
