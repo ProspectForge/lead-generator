@@ -95,19 +95,40 @@
       "supplement store",
       "vitamin shop",
       "health food store",
-      "nutrition store"
+      "nutrition store",
+      "natural health store",
+      "organic grocery",
+      "wellness store",
+      "herbal supplement shop"
     ],
     "sporting_goods": [
       "sporting goods store",
       "outdoor gear store",
       "athletic store",
-      "sports equipment store"
+      "sports equipment store",
+      "running shoe store",
+      "golf shop",
+      "tennis pro shop",
+      "ski equipment store",
+      "hockey store",
+      "soccer store",
+      "fishing tackle shop",
+      "archery store",
+      "climbing gear store",
+      "surf shop",
+      "lacrosse store"
     ],
     "apparel": [
       "clothing boutique",
       "fashion store",
       "apparel store",
-      "clothing store"
+      "clothing store",
+      "yoga apparel store",
+      "activewear store",
+      "athleisure boutique",
+      "workwear store",
+      "denim shop",
+      "outdoor clothing store"
     ],
     "pet_supplies": [
       "pet supply store",
@@ -128,17 +149,23 @@
     "running_athletic": [
       "running store",
       "triathlon store",
-      "marathon store"
+      "marathon store",
+      "track and field store"
     ],
     "cycling": [
       "bike shop",
       "bicycle store",
-      "cycling store"
+      "cycling store",
+      "mountain bike shop"
     ],
     "outdoor_camping": [
       "camping store",
       "hiking gear store",
-      "backpacking store"
+      "backpacking store",
+      "kayak shop",
+      "canoe outfitter",
+      "outdoor adventure store",
+      "mountaineering shop"
     ],
     "baby_kids": [
       "baby store",
