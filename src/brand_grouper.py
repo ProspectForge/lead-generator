@@ -3,6 +3,122 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 from collections import defaultdict
+from urllib.parse import urlparse
+from src.config import settings
+
+
+class NameNormalizer:
+    """Multi-layer name normalization for brand grouping."""
+
+    # Layer 1: Separators to split on (take first part)
+    SEPARATORS = [' - ', ' @ ', ' at ', ' | ', ': ']
+
+    # Layer 3: Location words to strip from END
+    LOCATION_WORDS = {
+        'downtown', 'uptown', 'midtown', 'east', 'west', 'north', 'south',
+        'street', 'st', 'ave', 'avenue', 'blvd', 'boulevard', 'road', 'rd',
+        'plaza', 'mall', 'centre', 'center', 'square', 'park'
+    }
+
+    # Layer 3: Store types to strip from END
+    STORE_TYPES = {
+        'store', 'shop', 'boutique', 'outlet', 'factory', 'factory outlet',
+        'clearance', 'warehouse', 'superstore', 'megastore', 'express'
+    }
+
+    # Legal suffixes to strip
+    LEGAL_SUFFIXES = {'inc', 'llc', 'ltd', 'corp', 'co', 'company'}
+
+    def __init__(self):
+        self.city_names = set(name.lower() for name in settings.get_all_city_names())
+
+    def extract_domain_hint(self, url: str) -> str:
+        """Extract brand hint from domain name."""
+        if not url:
+            return ""
+
+        try:
+            # Handle URLs without scheme
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+
+            parsed = urlparse(url)
+            domain = parsed.netloc or parsed.path.split('/')[0]
+
+            # Remove www. prefix
+            if domain.startswith('www.'):
+                domain = domain[4:]
+
+            # Take the main domain part (before TLD)
+            parts = domain.split('.')
+            if len(parts) >= 2:
+                return parts[0].lower()
+            return domain.lower()
+        except Exception:
+            return ""
+
+    def normalize(self, name: str, domain: str = "") -> str:
+        """Apply multi-layer normalization to a brand name."""
+        if not name:
+            return ""
+
+        original = name
+        result = name.strip()
+
+        # Layer 1: Split on separators, take first part
+        for sep in self.SEPARATORS:
+            if sep in result:
+                result = result.split(sep)[0].strip()
+                break
+
+        # Lowercase for remaining operations
+        result = result.lower()
+
+        # Extract domain hint for protection
+        domain_hint = self.extract_domain_hint(domain)
+        protected_words = set(domain_hint.replace('-', ' ').split()) if domain_hint else set()
+
+        # Layer 3a: Strip legal suffixes
+        words = result.split()
+        while words and words[-1].rstrip('.') in self.LEGAL_SUFFIXES:
+            words.pop()
+        result = ' '.join(words)
+
+        # Layer 3b: Strip store types from end
+        for store_type in sorted(self.STORE_TYPES, key=len, reverse=True):
+            if result.endswith(' ' + store_type):
+                candidate = result[:-len(store_type)-1].strip()
+                if len(candidate) >= 3:
+                    result = candidate
+                    break
+
+        # Layer 3c: Strip location words from end (if not protected)
+        words = result.split()
+        while words and words[-1] in self.LOCATION_WORDS and words[-1] not in protected_words:
+            candidate = ' '.join(words[:-1])
+            if len(candidate) >= 3:
+                words.pop()
+                result = candidate
+            else:
+                break
+
+        # Layer 3d: Strip city names from end (if not protected)
+        words = result.split()
+        if words:
+            last_word = words[-1]
+            if last_word in self.city_names and last_word not in protected_words:
+                candidate = ' '.join(words[:-1])
+                if len(candidate) >= 3:
+                    result = candidate
+
+        # Layer 3e: Strip store numbers from end
+        result = re.sub(r'\s*#?\d+$', '', result).strip()
+
+        # Safety: never return less than 3 characters (unless input was shorter)
+        if len(result) < 3 and len(original) >= 3:
+            result = original.lower().strip()
+
+        return result.strip()
 
 @dataclass
 class BrandGroup:

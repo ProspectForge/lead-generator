@@ -39,3 +39,62 @@ def test_excludes_over_max_locations():
     filtered = grouper.filter(groups)
 
     assert len(filtered) == 0  # 15 locations exceeds max of 10
+
+
+class TestNameNormalizer:
+    """Tests for the multi-layer name normalization."""
+
+    def test_strips_separator_suffix(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        assert normalizer.normalize("Healthy Planet - Yonge & Dundas") == "healthy planet"
+        assert normalizer.normalize("Nike @ Downtown Mall") == "nike"
+        assert normalizer.normalize("Store Name | Location") == "store name"
+
+    def test_strips_city_names(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        assert normalizer.normalize("Nike Toronto") == "nike"
+        assert normalizer.normalize("Supplement King Vancouver") == "supplement king"
+        assert normalizer.normalize("Fleet Feet Chicago") == "fleet feet"
+
+    def test_strips_location_words(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        assert normalizer.normalize("Nike Downtown") == "nike"
+        assert normalizer.normalize("Store Name East") == "store name"
+        assert normalizer.normalize("Brand Plaza") == "brand"
+
+    def test_strips_store_types(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        assert normalizer.normalize("Nike Factory Outlet") == "nike"
+        assert normalizer.normalize("Brand Store") == "brand"
+        assert normalizer.normalize("Name Boutique") == "name"
+
+    def test_preserves_domain_words(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        # "Portland" should stay if it's in the domain
+        result = normalizer.normalize("Portland Running Company", domain="portlandrunning.com")
+        assert "portland" in result
+
+    def test_minimum_length_safety(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        # Should not strip to less than 3 chars
+        assert len(normalizer.normalize("AB Store")) >= 2
+
+    def test_extracts_domain_hint(self):
+        from src.brand_grouper import NameNormalizer
+        normalizer = NameNormalizer()
+
+        assert normalizer.extract_domain_hint("https://healthyplanetcanada.com/store") == "healthyplanetcanada"
+        assert normalizer.extract_domain_hint("http://www.nike.com") == "nike"
+        assert normalizer.extract_domain_hint("popeyestoronto.com") == "popeyestoronto"
