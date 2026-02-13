@@ -120,6 +120,33 @@ class NameNormalizer:
 
         return result.strip()
 
+
+class BlocklistChecker:
+    """Check if a brand name matches the large chain blocklist."""
+
+    def __init__(self):
+        self.blocklist = settings.known_large_chains
+        self.normalizer = NameNormalizer()
+
+    def is_blocked(self, name: str) -> bool:
+        """Check if a normalized brand name should be blocked."""
+        normalized = self.normalizer.normalize(name)
+
+        # Exact match
+        if normalized in self.blocklist:
+            return True
+
+        # Prefix match: "nike store" starts with "nike"
+        # But protect against false positives like "nikesha"
+        for chain in self.blocklist:
+            if normalized.startswith(chain + ' '):
+                return True
+            if normalized.startswith(chain + "'s "):
+                return True
+
+        return False
+
+
 @dataclass
 class BrandGroup:
     normalized_name: str

@@ -142,3 +142,37 @@ class TestDomainAwareGrouping:
         # All Nike variations with same domain should merge
         assert len(groups) == 1
         assert groups[0].location_count == 3
+
+
+class TestBlocklistMatching:
+    """Tests for improved blocklist matching."""
+
+    def test_blocks_exact_match(self):
+        from src.brand_grouper import BlocklistChecker
+        checker = BlocklistChecker()
+
+        assert checker.is_blocked("nike") == True
+        assert checker.is_blocked("adidas") == True
+        assert checker.is_blocked("lululemon") == True
+
+    def test_blocks_with_suffix(self):
+        from src.brand_grouper import BlocklistChecker
+        checker = BlocklistChecker()
+
+        assert checker.is_blocked("nike store") == True
+        assert checker.is_blocked("nike factory outlet") == True
+        assert checker.is_blocked("the north face") == True
+
+    def test_allows_partial_unrelated(self):
+        from src.brand_grouper import BlocklistChecker
+        checker = BlocklistChecker()
+
+        # "nike" in blocklist shouldn't block "nikesha's boutique"
+        assert checker.is_blocked("nikesha's boutique") == False
+
+    def test_allows_unknown_brands(self):
+        from src.brand_grouper import BlocklistChecker
+        checker = BlocklistChecker()
+
+        assert checker.is_blocked("portland running company") == False
+        assert checker.is_blocked("local supplement shop") == False
