@@ -100,13 +100,13 @@ def run(
         console.print("[bold cyan]Step 1:[/bold cyan] Select retail verticals to search\n")
 
         vertical_choices = inquirer.checkbox(
-            message="Select verticals (Space to toggle, Enter to confirm):",
+            message="Select verticals (Space to select, Enter to confirm):",
             choices=[
-                {"name": VERTICALS["health_wellness"], "value": "health_wellness", "enabled": True},
-                {"name": VERTICALS["sporting_goods"], "value": "sporting_goods", "enabled": True},
-                {"name": VERTICALS["apparel"], "value": "apparel", "enabled": True},
+                {"name": VERTICALS["health_wellness"], "value": "health_wellness"},
+                {"name": VERTICALS["sporting_goods"], "value": "sporting_goods"},
+                {"name": VERTICALS["apparel"], "value": "apparel"},
             ],
-            instruction="(Use arrow keys and space to select)",
+            instruction="(↑↓ navigate, Space select, Enter confirm)",
         ).execute()
 
         if not vertical_choices:
@@ -119,12 +119,12 @@ def run(
         console.print("\n[bold cyan]Step 2:[/bold cyan] Select countries to search\n")
 
         country_choices = inquirer.checkbox(
-            message="Select countries (Space to toggle, Enter to confirm):",
+            message="Select countries (Space to select, Enter to confirm):",
             choices=[
-                {"name": COUNTRIES["us"], "value": "us", "enabled": True},
-                {"name": COUNTRIES["canada"], "value": "canada", "enabled": True},
+                {"name": COUNTRIES["us"], "value": "us"},
+                {"name": COUNTRIES["canada"], "value": "canada"},
             ],
-            instruction="(Use arrow keys and space to select)",
+            instruction="(↑↓ navigate, Space select, Enter confirm)",
         ).execute()
 
         if not country_choices:
