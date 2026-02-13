@@ -131,6 +131,91 @@ class Pipeline:
 
         return filtered
 
+    async def stage_2b_verify_chain_size(self, brands: list[BrandGroup], searched_cities: list[str]) -> list[BrandGroup]:
+        """Verify brands aren't large nationwide chains by checking additional cities."""
+        self._show_stage_header("2b", "Chain Size Verification", "Filtering out large nationwide chains")
+
+        if not brands:
+            console.print("  [yellow]⚠ No brands to verify[/yellow]")
+            return []
+
+        # Test cities NOT in our main search to detect nationwide presence
+        test_cities = [
+            "Albuquerque, NM",
+            "Tucson, AZ",
+            "Omaha, NE",
+            "Boise, ID",
+            "Richmond, VA",
+            "Knoxville, TN",
+            "Des Moines, IA",
+            "Spokane, WA",
+        ]
+        # Remove any test cities that were in our search
+        test_cities = [c for c in test_cities if c not in searched_cities][:5]
+
+        if not test_cities:
+            console.print("  [yellow]⚠ No test cities available, skipping verification[/yellow]")
+            return brands
+
+        searcher = PlacesSearcher(api_key=settings.google_places_api_key)
+        verified_brands = []
+        large_chains_found = 0
+
+        console.print(f"  [dim]• Testing {len(brands)} brands in {len(test_cities)} additional cities[/dim]")
+        console.print(f"  [dim]• Brands found in 3+ test cities are likely large chains[/dim]")
+        console.print()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Verifying...", total=len(brands))
+
+            for brand in brands:
+                brand_name = brand.normalized_name.title()
+                progress.update(task, description=f"[cyan]Checking[/cyan] {brand_name}")
+
+                # Search for this brand in test cities
+                found_in_cities = 0
+                for test_city in test_cities:
+                    try:
+                        results = await searcher.search(brand_name, test_city)
+                        # Check if any result matches this brand
+                        for r in results:
+                            if brand.normalized_name.lower() in r.name.lower():
+                                found_in_cities += 1
+                                break
+                        await asyncio.sleep(0.1)
+                    except Exception:
+                        pass
+
+                # If found in 3+ additional cities, likely a large chain
+                if found_in_cities >= 3:
+                    brand.is_large_chain = True
+                    brand.estimated_nationwide = brand.location_count + (found_in_cities * 10)  # Rough estimate
+                    large_chains_found += 1
+                    progress.update(task, description=f"[red]✗ Large chain[/red] {brand_name} (found in {found_in_cities} test cities)")
+                else:
+                    verified_brands.append(brand)
+                    progress.update(task, description=f"[green]✓ Verified[/green] {brand_name}")
+
+                progress.advance(task)
+
+        # Summary
+        console.print()
+        table = Table(box=box.SIMPLE)
+        table.add_column("Status", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Verified (true regional chains)", f"[bold green]{len(verified_brands)}[/bold green]")
+        table.add_row("Excluded (large nationwide chains)", f"[bold red]{large_chains_found}[/bold red]")
+        console.print(table)
+
+        return verified_brands
+
     async def stage_3_ecommerce(self, brands: list[BrandGroup]) -> list[BrandGroup]:
         """Check each brand for e-commerce presence."""
         self._show_stage_header(3, "E-commerce Detection", "Checking websites for online store presence")
@@ -316,11 +401,19 @@ class Pipeline:
         # Stage 1: Search
         places = await self.stage_1_search(verticals, countries)
 
+        # Get list of cities we searched (for chain verification)
+        searched_cities = []
+        for country in countries:
+            searched_cities.extend(settings.cities.get(country, []))
+
         # Stage 2: Group and filter
         brands = self.stage_2_group(places)
 
+        # Stage 2b: Verify chain sizes (filter out large nationwide chains)
+        verified_brands = await self.stage_2b_verify_chain_size(brands, searched_cities)
+
         # Stage 3: E-commerce check
-        ecommerce_brands = await self.stage_3_ecommerce(brands)
+        ecommerce_brands = await self.stage_3_ecommerce(verified_brands)
 
         # Stage 4: LinkedIn enrichment
         enriched = await self.stage_4_linkedin(ecommerce_brands)
