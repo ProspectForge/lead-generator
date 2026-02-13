@@ -1,10 +1,16 @@
 # src/brand_grouper.py
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 from collections import defaultdict
 from urllib.parse import urlparse
 from src.config import settings
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 
 class NameNormalizer:
@@ -145,6 +151,119 @@ class BlocklistChecker:
                 return True
 
         return False
+
+
+@dataclass
+class LLMAnalysisResult:
+    """Result from LLM brand analysis."""
+    merges: list  # Groups of brand names to merge
+    large_chains: list  # Brand names that are large national chains
+
+
+class LLMBrandAnalyzer:
+    """Use LLM to disambiguate brand groups and detect large chains."""
+
+    PROMPT_TEMPLATE = """You are analyzing retail brand names to help identify:
+1. Groups that should be merged (same company, different name variations)
+2. Brands that are large national chains (50+ locations nationwide)
+
+Here are the brand groups found:
+{brand_list}
+
+Respond with JSON only, no explanation:
+{{
+  "merges": [["brand1", "brand2"], ["brand3", "brand4"]],
+  "large_chains": ["brand5", "brand6"]
+}}
+
+Rules:
+- Only merge if you're confident they're the same company
+- Only mark as large_chain if you know it's a major national/international retailer
+- If uncertain, don't include it
+"""
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled and settings.llm.enabled
+        self.model = settings.llm.model
+        self.client = None
+
+        if self.enabled and OpenAI and settings.openai_api_key:
+            self.client = OpenAI(api_key=settings.openai_api_key)
+
+    def find_ambiguous_groups(self, groups: list) -> list:
+        """Find groups that might need LLM disambiguation."""
+        ambiguous_sets = []
+
+        # Find groups with similar names (shared prefix)
+        names = [(g.normalized_name, g) for g in groups]
+
+        for i, (name1, group1) in enumerate(names):
+            similar = [group1]
+            words1 = set(name1.split())
+
+            for name2, group2 in names[i+1:]:
+                words2 = set(name2.split())
+                # Check for significant word overlap
+                overlap = words1 & words2
+                if len(overlap) >= 1 and len(overlap) / max(len(words1), len(words2)) >= 0.5:
+                    similar.append(group2)
+
+            if len(similar) > 1:
+                ambiguous_sets.append(similar)
+
+        # Also flag groups near the threshold (8-12 locations)
+        borderline = [g for g in groups if 8 <= g.location_count <= 12]
+        if borderline:
+            ambiguous_sets.append(borderline)
+
+        return ambiguous_sets
+
+    def analyze(self, groups: list) -> LLMAnalysisResult:
+        """Analyze groups using LLM and return recommendations."""
+        if not self.enabled or not self.client:
+            return LLMAnalysisResult(merges=[], large_chains=[])
+
+        # Find ambiguous cases
+        ambiguous = self.find_ambiguous_groups(groups)
+        if not ambiguous:
+            return LLMAnalysisResult(merges=[], large_chains=[])
+
+        # Build brand list for prompt
+        relevant_groups = []
+        seen_names = set()
+        for group_set in ambiguous:
+            for g in group_set:
+                if g.normalized_name not in seen_names:
+                    relevant_groups.append(g)
+                    seen_names.add(g.normalized_name)
+
+        brand_list = "\n".join(
+            f"- {g.normalized_name} ({g.location_count} locations)"
+            for g in relevant_groups
+        )
+
+        prompt = self.PROMPT_TEMPLATE.format(brand_list=brand_list)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=1000
+            )
+
+            content = response.choices[0].message.content
+            # Parse JSON from response
+            result = json.loads(content)
+
+            return LLMAnalysisResult(
+                merges=result.get("merges", []),
+                large_chains=result.get("large_chains", [])
+            )
+        except Exception as e:
+            # Log error but don't fail the pipeline
+            print(f"LLM analysis failed: {e}")
+            return LLMAnalysisResult(merges=[], large_chains=[])
 
 
 @dataclass

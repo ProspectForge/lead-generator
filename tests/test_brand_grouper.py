@@ -1,5 +1,6 @@
 # tests/test_brand_grouper.py
 import pytest
+from unittest.mock import patch, MagicMock
 from src.brand_grouper import BrandGrouper, BrandGroup
 
 @pytest.fixture
@@ -176,3 +177,68 @@ class TestBlocklistMatching:
 
         assert checker.is_blocked("portland running company") == False
         assert checker.is_blocked("local supplement shop") == False
+
+
+class TestLLMFallback:
+    """Tests for LLM-based disambiguation."""
+
+    def test_identifies_ambiguous_cases(self):
+        from src.brand_grouper import LLMBrandAnalyzer, BrandGroup
+
+        groups = [
+            BrandGroup(normalized_name="fleet feet running", location_count=5),
+            BrandGroup(normalized_name="fleet feet sports", location_count=3),
+            BrandGroup(normalized_name="portland running", location_count=4),
+        ]
+
+        analyzer = LLMBrandAnalyzer(enabled=False)  # Disabled for this test
+        ambiguous = analyzer.find_ambiguous_groups(groups)
+
+        # "fleet feet running" and "fleet feet sports" are ambiguous
+        assert len(ambiguous) >= 1
+
+    def test_skips_llm_when_disabled(self):
+        from src.brand_grouper import LLMBrandAnalyzer, BrandGroup
+
+        groups = [
+            BrandGroup(normalized_name="fleet feet running", location_count=5),
+            BrandGroup(normalized_name="fleet feet sports", location_count=3),
+        ]
+
+        analyzer = LLMBrandAnalyzer(enabled=False)
+        result = analyzer.analyze(groups)
+
+        # Should return empty recommendations when disabled
+        assert result.merges == []
+        assert result.large_chains == []
+
+    @patch('src.brand_grouper.settings')
+    @patch('src.brand_grouper.OpenAI')
+    def test_calls_openai_for_ambiguous(self, mock_openai_class, mock_settings):
+        from src.brand_grouper import LLMBrandAnalyzer, BrandGroup
+
+        # Mock settings
+        mock_settings.llm.enabled = True
+        mock_settings.llm.model = "gpt-4o-mini"
+        mock_settings.openai_api_key = "test-key"
+
+        # Mock OpenAI response
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(
+                message=MagicMock(
+                    content='{"merges": [["fleet feet running", "fleet feet sports"]], "large_chains": []}'
+                )
+            )]
+        )
+
+        groups = [
+            BrandGroup(normalized_name="fleet feet running", location_count=5),
+            BrandGroup(normalized_name="fleet feet sports", location_count=3),
+        ]
+
+        analyzer = LLMBrandAnalyzer(enabled=True)
+        result = analyzer.analyze(groups)
+
+        assert ["fleet feet running", "fleet feet sports"] in result.merges
