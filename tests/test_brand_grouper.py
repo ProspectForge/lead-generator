@@ -98,3 +98,47 @@ class TestNameNormalizer:
         assert normalizer.extract_domain_hint("https://healthyplanetcanada.com/store") == "healthyplanetcanada"
         assert normalizer.extract_domain_hint("http://www.nike.com") == "nike"
         assert normalizer.extract_domain_hint("popeyestoronto.com") == "popeyestoronto"
+
+
+class TestDomainAwareGrouping:
+    """Tests for grouping that uses both name and domain."""
+
+    def test_groups_by_normalized_name_and_domain(self):
+        places = [
+            {"name": "Healthy Planet - Yonge", "website": "https://healthyplanet.com", "city": "Toronto, ON"},
+            {"name": "Healthy Planet - Queen", "website": "https://healthyplanet.com", "city": "Toronto, ON"},
+            {"name": "Healthy Planet Downtown", "website": "https://healthyplanet.com", "city": "Vancouver, BC"},
+        ]
+
+        grouper = BrandGrouper()
+        groups = grouper.group(places)
+
+        # All three should be in one group
+        assert len(groups) == 1
+        assert groups[0].location_count == 3
+
+    def test_same_name_different_domain_separate(self):
+        places = [
+            {"name": "The Running Room", "website": "https://runningroom.com", "city": "Toronto, ON"},
+            {"name": "The Running Room", "website": "https://differentrunningroom.com", "city": "Vancouver, BC"},
+        ]
+
+        grouper = BrandGrouper()
+        groups = grouper.group(places)
+
+        # Same name but different domains - should be separate
+        assert len(groups) == 2
+
+    def test_merges_groups_with_same_domain_similar_names(self):
+        places = [
+            {"name": "Nike Store", "website": "https://nike.com", "city": "Toronto, ON"},
+            {"name": "Nike Factory Outlet", "website": "https://nike.com", "city": "Vancouver, BC"},
+            {"name": "Nike", "website": "https://nike.com", "city": "Chicago, IL"},
+        ]
+
+        grouper = BrandGrouper()
+        groups = grouper.group(places)
+
+        # All Nike variations with same domain should merge
+        assert len(groups) == 1
+        assert groups[0].location_count == 3

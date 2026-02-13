@@ -135,51 +135,129 @@ class BrandGroup:
     priority: str = "medium"
 
 class BrandGrouper:
-    # Common suffixes to strip for normalization
-    STRIP_PATTERNS = [
-        r'\s+(inc\.?|llc\.?|ltd\.?|corp\.?)$',
-        r'\s+(store|shop|boutique|outlet)$',
-        r'\s+(athletica|athletics)$',
-        r'\s+#?\d+$',  # Store numbers
-    ]
+    """Groups places by brand using multi-layer normalization and domain matching."""
 
     def __init__(self, min_locations: int = 3, max_locations: int = 10):
         self.min_locations = min_locations
         self.max_locations = max_locations
+        self.normalizer = NameNormalizer()
 
-    def _normalize_name(self, name: str) -> str:
-        normalized = name.lower().strip()
-        for pattern in self.STRIP_PATTERNS:
-            normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
-        return normalized.strip()
+    def _get_domain(self, url: str) -> str:
+        """Extract normalized domain from URL."""
+        return self.normalizer.extract_domain_hint(url)
+
+    def _get_group_key(self, name: str, website: str) -> tuple[str, str]:
+        """Generate grouping key from name and website."""
+        domain = self._get_domain(website) if website else ""
+        normalized_name = self.normalizer.normalize(name, domain=website)
+        return (normalized_name, domain)
 
     def group(self, places: list[dict]) -> list[BrandGroup]:
-        groups: dict[str, BrandGroup] = defaultdict(lambda: BrandGroup(normalized_name=""))
+        """Group places by normalized name and domain."""
+        # Phase 1: Initial grouping by (normalized_name, domain)
+        groups: dict[tuple[str, str], BrandGroup] = defaultdict(
+            lambda: BrandGroup(normalized_name="")
+        )
 
         for place in places:
             name = place.get("name", "")
-            normalized = self._normalize_name(name)
+            website = place.get("website", "")
 
-            if not normalized:
+            if not name:
                 continue
 
-            if groups[normalized].normalized_name == "":
-                groups[normalized].normalized_name = normalized
+            key = self._get_group_key(name, website)
+            normalized_name, domain = key
 
-            groups[normalized].original_names.append(name)
-            groups[normalized].location_count += 1
-            groups[normalized].locations.append(place)
+            if not normalized_name:
+                continue
 
-            if place.get("website") and not groups[normalized].website:
-                groups[normalized].website = place["website"]
+            if groups[key].normalized_name == "":
+                groups[key].normalized_name = normalized_name
+
+            groups[key].original_names.append(name)
+            groups[key].location_count += 1
+            groups[key].locations.append(place)
+
+            if website and not groups[key].website:
+                groups[key].website = website
 
             city = place.get("city", "")
-            if city and city not in groups[normalized].cities:
-                groups[normalized].cities.append(city)
+            if city and city not in groups[key].cities:
+                groups[key].cities.append(city)
 
-        return list(groups.values())
+        # Phase 2: Merge groups with same domain and similar names
+        merged_groups = self._merge_by_domain(list(groups.values()))
+
+        return merged_groups
+
+    def _merge_by_domain(self, groups: list[BrandGroup]) -> list[BrandGroup]:
+        """Merge groups that share the same domain and have related names."""
+        # Group by domain
+        by_domain: dict[str, list[BrandGroup]] = defaultdict(list)
+        no_domain: list[BrandGroup] = []
+
+        for group in groups:
+            domain = self._get_domain(group.website) if group.website else ""
+            if domain:
+                by_domain[domain].append(group)
+            else:
+                no_domain.append(group)
+
+        merged = []
+
+        # Merge groups with same domain
+        for domain, domain_groups in by_domain.items():
+            if len(domain_groups) == 1:
+                merged.append(domain_groups[0])
+            else:
+                # Check if names are related (share common prefix)
+                if self._names_are_related([g.normalized_name for g in domain_groups]):
+                    # Merge all into one
+                    base = domain_groups[0]
+                    for other in domain_groups[1:]:
+                        base.original_names.extend(other.original_names)
+                        base.location_count += other.location_count
+                        base.locations.extend(other.locations)
+                        for city in other.cities:
+                            if city not in base.cities:
+                                base.cities.append(city)
+                    merged.append(base)
+                else:
+                    # Keep separate
+                    merged.extend(domain_groups)
+
+        # Add groups without domains
+        merged.extend(no_domain)
+
+        return merged
+
+    def _names_are_related(self, names: list[str]) -> bool:
+        """Check if names share a common prefix (indicating same brand)."""
+        if not names or len(names) < 2:
+            return True
+
+        # Find shortest common prefix
+        sorted_names = sorted(names, key=len)
+        shortest = sorted_names[0]
+
+        # Check if all names start with the shortest one (or vice versa)
+        for name in names:
+            # At least 3 chars must match at start
+            prefix_len = 0
+            for i, (c1, c2) in enumerate(zip(shortest, name)):
+                if c1 == c2:
+                    prefix_len = i + 1
+                else:
+                    break
+
+            if prefix_len < 3:
+                return False
+
+        return True
 
     def filter(self, groups: list[BrandGroup]) -> list[BrandGroup]:
+        """Filter groups by location count."""
         return [
             g for g in groups
             if self.min_locations <= g.location_count <= self.max_locations
