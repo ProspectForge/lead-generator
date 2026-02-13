@@ -164,14 +164,29 @@ class Discovery:
         # Sample cities for best-of scraping (limit to avoid too many requests)
         sample_cities = cities[:SAMPLE_CITIES_LIMIT]
 
+        # Build scraping tasks
+        scrape_tasks = []
         for vertical in verticals:
             queries = self.settings.search_queries.get(vertical, [])
             if not queries:
                 continue
-
             query = queries[0]  # Use first query as representative
-
             for city in sample_cities:
+                scrape_tasks.append((city, query, vertical))
+
+        if not scrape_tasks:
+            return results
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Scraping {len(scrape_tasks)} city/vertical combos...", total=len(scrape_tasks))
+
+            for city, query, vertical in scrape_tasks:
                 try:
                     brands = await self.bestof_scraper.scrape_city(city, query)
                     for brand in brands:
@@ -187,6 +202,7 @@ class Discovery:
                 except Exception as e:
                     if not _is_transient_error(e):
                         logger.warning("Scraping failed for %s in %s: %s", query, city, e)
+                progress.advance(task)
 
         return results
 
