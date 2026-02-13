@@ -10,6 +10,7 @@ from rich import box
 from InquirerPy import inquirer
 
 from src.pipeline import Pipeline
+from src.config import settings
 
 app = typer.Typer(help="Lead Generator - Find omnichannel retail leads")
 console = Console()
@@ -43,19 +44,29 @@ def show_summary(verticals: list[str], countries: list[str]):
     table.add_column("Setting", style="cyan", no_wrap=True)
     table.add_column("Value", style="green")
 
-    # Verticals
+    # Verticals - from actual selection
     vertical_names = [VERTICALS.get(v, v).split(" (")[0] for v in verticals]
     table.add_row("Verticals", ", ".join(vertical_names))
 
-    # Countries
+    # Countries - from actual selection
     country_names = [COUNTRIES.get(c, c).split(" (")[0] for c in countries]
     table.add_row("Countries", ", ".join(country_names))
 
-    # Estimated searches
-    cities_count = (35 if "us" in countries else 0) + (15 if "canada" in countries else 0)
-    queries_per_vertical = 4
-    total_searches = cities_count * len(verticals) * queries_per_vertical
+    # Calculate actual cities from config
+    cities = []
+    for country in countries:
+        cities.extend(settings.cities.get(country, []))
+    cities_count = len(cities)
+
+    # Calculate actual queries from config
+    queries = []
+    for vertical in verticals:
+        queries.extend(settings.search_queries.get(vertical, []))
+    queries_count = len(queries)
+
+    total_searches = cities_count * queries_count
     table.add_row("Cities", str(cities_count))
+    table.add_row("Queries per city", str(queries_count))
     table.add_row("Est. API Calls", f"~{total_searches}")
 
     console.print()
