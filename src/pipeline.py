@@ -17,6 +17,7 @@ from src.places_search import PlacesSearcher, PlaceResult
 from src.brand_grouper import BrandGrouper, BrandGroup
 from src.ecommerce_check import EcommerceChecker
 from src.linkedin_enrich import LinkedInEnricher
+from src.discovery import Discovery
 
 console = Console()
 
@@ -658,9 +659,10 @@ class Pipeline:
         ecommerce_brands = [self._deserialize_brand(b) for b in checkpoint.ecommerce_brands] if checkpoint and start_stage >= 3 else []
         enriched = checkpoint.enriched if checkpoint and start_stage >= 4 else []
 
-        # Stage 1: Search
+        # Stage 1: Discovery (enhanced multi-source search)
         if start_stage < 1:
-            places = await self.stage_1_search(verticals, countries)
+            discovery = Discovery(settings)
+            places = await discovery.run(verticals, countries)
             searched_cities = []
             for country in countries:
                 searched_cities.extend(settings.cities.get(country, []))
