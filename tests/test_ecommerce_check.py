@@ -124,3 +124,49 @@ def test_detect_no_marketplaces():
 
     assert marketplaces == []
     assert links == {}
+
+
+@pytest.fixture
+def ecommerce_with_marketplace_content():
+    return """
+    # Welcome to Our Store
+
+    Shop our latest collection
+
+    [Add to Cart](/cart)
+    [Checkout](/checkout)
+
+    Also find us on [Amazon](https://amazon.com/stores/OurBrand)!
+
+    Free shipping on orders over $50.00
+    """
+
+
+@pytest.mark.asyncio
+async def test_check_returns_marketplace_data(ecommerce_with_marketplace_content):
+    """check() should return marketplace detection results."""
+    checker = EcommerceChecker(api_key="test_key")
+
+    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
+        mock_crawl.return_value = [ecommerce_with_marketplace_content]
+
+        result = await checker.check("https://example.com")
+
+        assert result.has_ecommerce is True
+        assert "amazon" in result.marketplaces
+        assert result.priority == "high"
+
+
+@pytest.mark.asyncio
+async def test_check_returns_medium_priority_without_marketplace(ecommerce_page_content):
+    """check() should return medium priority when no marketplace found."""
+    checker = EcommerceChecker(api_key="test_key")
+
+    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
+        mock_crawl.return_value = [ecommerce_page_content]
+
+        result = await checker.check("https://example.com")
+
+        assert result.has_ecommerce is True
+        assert result.marketplaces == []
+        assert result.priority == "medium"

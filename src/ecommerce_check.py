@@ -273,7 +273,7 @@ class EcommerceChecker:
         return sorted(list(marketplaces_found)), marketplace_links
 
     async def check(self, url: str) -> EcommerceResult:
-        """Check if URL has e-commerce by crawling multiple pages."""
+        """Check if URL has e-commerce and marketplace presence by crawling multiple pages."""
         # Normalize URL
         if not url.startswith(('http://', 'https://')):
             url = f"https://{url}"
@@ -290,13 +290,18 @@ class EcommerceChecker:
                 confidence=0.0,
                 indicators_found=[],
                 platform=None,
-                pages_checked=0
+                pages_checked=0,
+                marketplaces=[],
+                marketplace_links={},
+                priority="medium"
             )
 
         all_indicators = []
         total_score = 0
         platform = None
         pages_checked = len(page_contents)
+        all_marketplaces = set()
+        all_marketplace_links = {}
 
         # Analyze all crawled pages
         for content in page_contents:
@@ -309,24 +314,34 @@ class EcommerceChecker:
             all_indicators.extend(indicators)
             total_score += score
 
-            # If platform detected, high confidence
-            if platform:
-                return EcommerceResult(
-                    url=url,
-                    has_ecommerce=True,
-                    confidence=0.95,
-                    indicators_found=[f"platform:{platform}"] + list(set(all_indicators)),
-                    platform=platform,
-                    pages_checked=pages_checked
-                )
-
-            # Early exit if score is high enough
-            if total_score >= 6:
-                break
+            # Detect marketplaces
+            marketplaces, links = self._detect_marketplaces(content)
+            all_marketplaces.update(marketplaces)
+            for mp, link in links.items():
+                if mp not in all_marketplace_links:
+                    all_marketplace_links[mp] = link
 
         # Calculate final result
         has_ecommerce = total_score >= 4 or platform is not None
         confidence = min(total_score / 10, 1.0) if has_ecommerce else total_score / 15
+
+        # Determine priority based on marketplace presence
+        final_marketplaces = sorted(list(all_marketplaces))
+        priority = "high" if final_marketplaces else "medium"
+
+        # If platform detected, high confidence
+        if platform:
+            return EcommerceResult(
+                url=url,
+                has_ecommerce=True,
+                confidence=0.95,
+                indicators_found=[f"platform:{platform}"] + list(set(all_indicators)),
+                platform=platform,
+                pages_checked=pages_checked,
+                marketplaces=final_marketplaces,
+                marketplace_links=all_marketplace_links,
+                priority=priority
+            )
 
         return EcommerceResult(
             url=url,
@@ -334,5 +349,8 @@ class EcommerceChecker:
             confidence=confidence,
             indicators_found=list(set(all_indicators)),
             platform=platform,
-            pages_checked=pages_checked
+            pages_checked=pages_checked,
+            marketplaces=final_marketplaces,
+            marketplace_links=all_marketplace_links,
+            priority=priority
         )
