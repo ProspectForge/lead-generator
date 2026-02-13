@@ -265,7 +265,14 @@ class Pipeline:
         with console.status("[cyan]Analyzing brands...[/cyan]"):
             grouper = BrandGrouper(min_locations=3, max_locations=10)
             groups = grouper.group(places)
-            filtered = grouper.filter(groups)
+
+            # Apply blocklist filter
+            filtered = grouper.filter_with_blocklist(groups)
+
+            # Apply LLM disambiguation if enabled
+            if settings.llm.enabled:
+                console.print("  [dim]• Running LLM disambiguation...[/dim]")
+                filtered = grouper.process_with_llm(filtered)
 
         # Show summary table
         table = Table(box=box.SIMPLE)
@@ -273,6 +280,7 @@ class Pipeline:
         table.add_column("Count", style="green", justify="right")
         table.add_row("Total places", str(len(places)))
         table.add_row("Unique brands", str(len(groups)))
+        table.add_row("After blocklist filter", str(len(filtered)))
         table.add_row("Brands with 3-10 locations", f"[bold]{len(filtered)}[/bold]")
 
         console.print(table)
