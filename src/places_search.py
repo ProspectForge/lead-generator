@@ -15,8 +15,17 @@ class PlaceResult:
 
 class PlacesSearcher:
     BASE_URL = "https://places.googleapis.com/v1/places:searchText"
+    NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
     MAX_RETRIES = 3
     RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+
+    # Google Places type mapping for retail
+    RETAIL_TYPES = {
+        "sporting_goods": ["sporting_goods_store", "bicycle_store"],
+        "health_wellness": ["health_food_store", "drugstore"],
+        "apparel": ["clothing_store", "shoe_store"],
+        "outdoor_camping": ["camping_store", "outdoor_recreation_store"],
+    }
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -26,14 +35,16 @@ class PlacesSearcher:
             "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.websiteUri,places.id"
         }
 
-    async def _make_request(self, payload: dict) -> dict:
+    async def _make_request(self, payload: dict, url: str = None, headers: dict = None) -> dict:
+        request_url = url or self.BASE_URL
+        request_headers = headers or self.headers
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
-                        self.BASE_URL,
-                        headers=self.headers,
+                        request_url,
+                        headers=request_headers,
                         json=payload
                     )
                     response.raise_for_status()
@@ -75,3 +86,60 @@ class PlacesSearcher:
             ))
 
         return results
+
+    async def nearby_search(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_meters: int = 5000,
+        included_types: list[str] = None,
+        vertical: str = ""
+    ) -> list[PlaceResult]:
+        """Search for places within a radius of a location."""
+        payload = {
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": latitude, "longitude": longitude},
+                    "radius": radius_meters
+                }
+            },
+            "maxResultCount": 20
+        }
+
+        if included_types:
+            payload["includedTypes"] = included_types
+
+        # Use nearby-specific headers
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.websiteUri,places.id,places.location"
+        }
+
+        data = await self._make_request(payload, url=self.NEARBY_URL, headers=headers)
+        places = data.get("places", [])
+
+        results = []
+        for place in places:
+            # Derive city from address (last part before zip)
+            address = place.get("formattedAddress", "")
+            city = self._extract_city_from_address(address)
+
+            results.append(PlaceResult(
+                name=place.get("displayName", {}).get("text", ""),
+                address=address,
+                website=place.get("websiteUri"),
+                place_id=place.get("id", ""),
+                city=city,
+                vertical=vertical
+            ))
+
+        return results
+
+    def _extract_city_from_address(self, address: str) -> str:
+        """Extract city name from formatted address."""
+        parts = address.split(",")
+        if len(parts) >= 2:
+            # Usually: "123 Main St, City, State ZIP"
+            return parts[-2].strip() if len(parts) >= 2 else ""
+        return ""
