@@ -83,3 +83,47 @@ async def test_enrich_returns_full_enrichment(mock_company_response, mock_people
         assert result is not None
         assert result.company.name == "Fleet Feet"
         assert len(result.contacts) == 2
+
+
+@pytest.fixture
+def mock_company_response_with_tech():
+    return {
+        "organization": {
+            "name": "Fleet Feet",
+            "primary_domain": "fleetfeet.com",
+            "industry": "Retail",
+            "estimated_num_employees": 500,
+            "annual_revenue_printed": "$50M-$100M",
+            "linkedin_url": "https://linkedin.com/company/fleet-feet",
+            "technology_names": ["Lightspeed", "Shopify", "Klaviyo", "Amazon"],
+            "retail_location_count": 7,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_company_extracts_technographics(mock_company_response_with_tech):
+    enricher = ApolloEnricher(api_key="test_key")
+
+    with patch.object(enricher, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_company_response_with_tech
+
+        company = await enricher.search_company("Fleet Feet", "https://fleetfeet.com")
+
+        assert company is not None
+        assert company.technology_names == ["Lightspeed", "Shopify", "Klaviyo", "Amazon"]
+        assert company.retail_location_count == 7
+
+
+@pytest.mark.asyncio
+async def test_search_company_handles_missing_tech_data(mock_company_response):
+    enricher = ApolloEnricher(api_key="test_key")
+
+    with patch.object(enricher, '_make_request', new_callable=AsyncMock) as mock_request:
+        mock_request.return_value = mock_company_response
+
+        company = await enricher.search_company("Fleet Feet", "https://fleetfeet.com")
+
+        assert company is not None
+        assert company.technology_names == []
+        assert company.retail_location_count is None

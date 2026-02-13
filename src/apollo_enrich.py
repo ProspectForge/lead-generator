@@ -15,7 +15,7 @@ Apollo provides:
 """
 import asyncio
 import httpx
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -36,6 +36,8 @@ class ApolloCompany:
     employee_count: Optional[int]
     estimated_revenue: Optional[str]
     linkedin_url: Optional[str]
+    technology_names: list[str] = field(default_factory=list)
+    retail_location_count: Optional[int] = None
 
 
 @dataclass
@@ -127,6 +129,8 @@ class ApolloEnricher:
                 employee_count=org.get("estimated_num_employees"),
                 estimated_revenue=org.get("annual_revenue_printed"),
                 linkedin_url=org.get("linkedin_url"),
+                technology_names=org.get("technology_names", []),
+                retail_location_count=org.get("retail_location_count"),
             )
 
         except Exception:
@@ -195,6 +199,8 @@ class ApolloEnricher:
                 employee_count=None,
                 estimated_revenue=None,
                 linkedin_url=None,
+                technology_names=[],
+                retail_location_count=None,
             )
 
         # Get contacts
