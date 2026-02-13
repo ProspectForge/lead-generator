@@ -25,6 +25,14 @@ class EnrichmentSettings:
 
 
 @dataclass
+class EmailVerificationSettings:
+    """Settings for email verification."""
+    enabled: bool = False  # Disabled by default
+    verify_smtp: bool = False  # SMTP check (slow, often blocked)
+    include_risky: bool = False  # Include catch-all/unknown emails
+
+
+@dataclass
 class Settings:
     google_places_api_key: str = ""
     firecrawl_api_key: str = ""
@@ -39,6 +47,7 @@ class Settings:
     search_concurrency: int = 10
     llm: LLMSettings = field(default_factory=LLMSettings)
     enrichment: EnrichmentSettings = field(default_factory=EnrichmentSettings)
+    email_verification: EmailVerificationSettings = field(default_factory=EmailVerificationSettings)
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
@@ -75,6 +84,14 @@ class Settings:
             enabled=enrichment_config.get("enabled", True),
             provider=enrichment_config.get("provider", "linkedin"),
             max_contacts=enrichment_config.get("max_contacts", 4)
+        )
+
+        # Load email verification settings
+        email_config = config.get("email_verification", {})
+        self.email_verification = EmailVerificationSettings(
+            enabled=email_config.get("enabled", False),
+            verify_smtp=email_config.get("verify_smtp", False),
+            include_risky=email_config.get("include_risky", False)
         )
 
     def get_all_city_names(self) -> list[str]:
