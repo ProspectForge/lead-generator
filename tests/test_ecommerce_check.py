@@ -68,3 +68,59 @@ def test_ecommerce_result_has_marketplace_fields():
     assert result.marketplaces == ["amazon", "ebay"]
     assert result.marketplace_links == {"amazon": "https://amazon.com/stores/example"}
     assert result.priority == "high"
+
+
+def test_detect_marketplaces_from_links():
+    """Should detect marketplace presence from URL patterns."""
+    checker = EcommerceChecker(api_key="test_key")
+
+    content = """
+    # Our Store
+
+    Find us online:
+    - [Amazon Store](https://amazon.com/stores/ExampleBrand)
+    - [eBay Shop](https://ebay.com/str/examplebrand)
+
+    Visit our locations for in-person shopping.
+    """
+
+    marketplaces, links = checker._detect_marketplaces(content)
+
+    assert "amazon" in marketplaces
+    assert "ebay" in marketplaces
+    assert "amazon" in links
+    assert "amazon.com/stores/ExampleBrand" in links["amazon"]
+
+
+def test_detect_marketplaces_from_text():
+    """Should detect marketplace presence from text mentions."""
+    checker = EcommerceChecker(api_key="test_key")
+
+    content = """
+    # Welcome
+
+    Shop on Amazon for fast Prime shipping!
+    Also available on Walmart marketplace.
+    """
+
+    marketplaces, links = checker._detect_marketplaces(content)
+
+    assert "amazon" in marketplaces
+    assert "walmart" in marketplaces
+
+
+def test_detect_no_marketplaces():
+    """Should return empty when no marketplace signals found."""
+    checker = EcommerceChecker(api_key="test_key")
+
+    content = """
+    # Our Store
+
+    Shop directly on our website for the best prices.
+    Free shipping on orders over $50.
+    """
+
+    marketplaces, links = checker._detect_marketplaces(content)
+
+    assert marketplaces == []
+    assert links == {}

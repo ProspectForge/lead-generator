@@ -240,6 +240,38 @@ class EcommerceChecker:
 
         return indicators, score
 
+    def _detect_marketplaces(self, content: str) -> tuple[list[str], dict[str, str]]:
+        """Detect marketplace presence from content.
+
+        Returns:
+            tuple of (list of marketplace names, dict of marketplace -> URL)
+        """
+        marketplaces_found = set()
+        marketplace_links = {}
+
+        # Check URL patterns (also try to extract the actual URL)
+        for marketplace, patterns in self.MARKETPLACE_PATTERNS.items():
+            for pattern in patterns:
+                match = re.search(pattern, content, re.IGNORECASE)
+                if match:
+                    marketplaces_found.add(marketplace)
+                    # Try to extract full URL
+                    url_pattern = rf'https?://[^\s\)\]"\'<>]*{pattern}[^\s\)\]"\'<>]*'
+                    url_match = re.search(url_pattern, content, re.IGNORECASE)
+                    if url_match and marketplace not in marketplace_links:
+                        marketplace_links[marketplace] = url_match.group(0)
+                    break
+
+        # Check text/badge patterns
+        for marketplace, patterns in self.MARKETPLACE_TEXT_PATTERNS.items():
+            if marketplace not in marketplaces_found:
+                for pattern in patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        marketplaces_found.add(marketplace)
+                        break
+
+        return sorted(list(marketplaces_found)), marketplace_links
+
     async def check(self, url: str) -> EcommerceResult:
         """Check if URL has e-commerce by crawling multiple pages."""
         # Normalize URL
