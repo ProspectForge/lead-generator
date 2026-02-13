@@ -283,7 +283,7 @@
   },
   "enrichment": {
     "enabled": true,
-    "provider": "linkedin",
+    "provider": "apollo",
     "max_contacts": 4
   },
   "email_verification": {
