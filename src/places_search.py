@@ -1,4 +1,5 @@
 # src/places_search.py
+import asyncio
 import httpx
 from dataclasses import dataclass
 from typing import Optional
@@ -14,6 +15,8 @@ class PlaceResult:
 
 class PlacesSearcher:
     BASE_URL = "https://places.googleapis.com/v1/places:searchText"
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -24,14 +27,32 @@ class PlacesSearcher:
         }
 
     async def _make_request(self, payload: dict) -> dict:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                self.BASE_URL,
-                headers=self.headers,
-                json=payload
-            )
-            response.raise_for_status()
-            return response.json()
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        self.BASE_URL,
+                        headers=self.headers,
+                        json=payload
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                # Retry on 503 (Service Unavailable) or 429 (Rate Limit)
+                if e.response.status_code in (503, 429, 500):
+                    if attempt < self.MAX_RETRIES - 1:
+                        await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                        continue
+                raise
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                raise
+        raise last_error
 
     async def search(self, query: str, city: str, vertical: str = "") -> list[PlaceResult]:
         payload = {

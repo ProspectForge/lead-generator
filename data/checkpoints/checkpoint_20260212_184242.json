@@ -1,0 +1,53 @@
+{
+  "stage": 2,
+  "verticals": [
+    "apparel"
+  ],
+  "countries": [
+    "us"
+  ],
+  "searched_cities": [
+    "New York, NY",
+    "Los Angeles, CA",
+    "Chicago, IL",
+    "Houston, TX",
+    "Phoenix, AZ",
+    "Philadelphia, PA",
+    "San Antonio, TX",
+    "San Diego, CA",
+    "Dallas, TX",
+    "San Jose, CA",
+    "Austin, TX",
+    "Seattle, WA",
+    "Denver, CO",
+    "Boston, MA",
+    "Nashville, TN",
+    "Portland, OR",
+    "Atlanta, GA",
+    "Miami, FL",
+    "Minneapolis, MN",
+    "Detroit, MI",
+    "San Francisco, CA",
+    "Charlotte, NC",
+    "Orlando, FL",
+    "Salt Lake City, UT",
+    "Indianapolis, IN",
+    "Columbus, OH",
+    "Kansas City, MO",
+    "Las Vegas, NV",
+    "Raleigh, NC",
+    "Tampa, FL",
+    "St. Louis, MO",
+    "Pittsburgh, PA",
+    "Cincinnati, OH",
+    "Sacramento, CA",
+    "Cleveland, OH"
+  ],
+  "places": [
+    {
+      "name": "Test Store"
+    }
+  ],
+  "brands": [
+    {
+      "normalized_name": 

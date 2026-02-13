@@ -1,4 +1,5 @@
 # src/linkedin_enrich.py
+import asyncio
 import httpx
 import re
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ class CompanyEnrichment:
 
 class LinkedInEnricher:
     FIRECRAWL_URL = "https://api.firecrawl.dev/v1/scrape"
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
 
     TARGET_TITLES = [
         "owner", "founder", "co-founder",
@@ -37,14 +40,34 @@ class LinkedInEnricher:
         }
 
     async def _fetch_page(self, url: str) -> dict:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                self.FIRECRAWL_URL,
-                headers=self.headers,
-                json={"url": url, "formats": ["markdown"]}
-            )
-            response.raise_for_status()
-            return response.json()
+        """Fetch page with retry logic."""
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        self.FIRECRAWL_URL,
+                        headers=self.headers,
+                        json={"url": url, "formats": ["markdown"]}
+                    )
+                    # Check for insufficient credits specifically
+                    if response.status_code == 402:
+                        raise RuntimeError("Firecrawl API credits exhausted - add credits at https://firecrawl.dev/pricing")
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code in (503, 429, 500) and attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                raise
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                raise
+        raise last_error
 
     async def _search_linkedin(self, company_name: str, website: str) -> Optional[str]:
         # Use Google search via Firecrawl to find LinkedIn company page
@@ -57,6 +80,8 @@ class LinkedInEnricher:
             match = re.search(r'linkedin\.com/company/[\w-]+', content)
             if match:
                 return f"https://{match.group(0)}"
+        except RuntimeError:
+            raise  # Re-raise credit exhaustion errors
         except Exception:
             pass
         return None
@@ -78,6 +103,8 @@ class LinkedInEnricher:
                     title="(to be verified)",
                     linkedin_url=f"https://linkedin.com/in/{profile_id}"
                 ))
+        except RuntimeError:
+            raise  # Re-raise credit exhaustion errors
         except Exception:
             pass
 

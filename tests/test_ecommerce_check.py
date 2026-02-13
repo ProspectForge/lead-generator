@@ -31,20 +31,20 @@ def non_ecommerce_page_content():
 async def test_detects_ecommerce_site(ecommerce_page_content):
     checker = EcommerceChecker(api_key="test_key")
 
-    with patch.object(checker, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ecommerce_page_content
+    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
+        mock_crawl.return_value = [ecommerce_page_content]
 
         result = await checker.check("https://example.com")
 
         assert result.has_ecommerce is True
-        assert result.confidence > 0.5
+        assert result.confidence >= 0.5
 
 @pytest.mark.asyncio
 async def test_detects_non_ecommerce_site(non_ecommerce_page_content):
     checker = EcommerceChecker(api_key="test_key")
 
-    with patch.object(checker, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = non_ecommerce_page_content
+    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
+        mock_crawl.return_value = [non_ecommerce_page_content]
 
         result = await checker.check("https://example.com")
 

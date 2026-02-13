@@ -71,6 +71,99 @@
       "fashion store",
       "apparel store",
       "clothing store"
+    ],
+    "pet_supplies": [
+      "pet supply store",
+      "pet food store",
+      "pet shop"
+    ],
+    "beauty_cosmetics": [
+      "beauty supply store",
+      "cosmetics store",
+      "makeup store"
+    ],
+    "specialty_food": [
+      "gourmet food store",
+      "specialty grocery",
+      "cheese shop",
+      "spice shop"
+    ],
+    "running_athletic": [
+      "running store",
+      "triathlon store",
+      "marathon store"
+    ],
+    "cycling": [
+      "bike shop",
+      "bicycle store",
+      "cycling store"
+    ],
+    "outdoor_camping": [
+      "camping store",
+      "hiking gear store",
+      "backpacking store"
+    ],
+    "baby_kids": [
+      "baby store",
+      "children's clothing store",
+      "kids store"
+    ],
+    "home_goods": [
+      "kitchenware store",
+      "home goods store",
+      "cookware store"
     ]
+  },
+  "known_large_chains": [
+    "gnc",
+    "vitamin shoppe",
+    "the vitamin shoppe",
+    "cvs",
+    "walgreens",
+    "rite aid",
+    "dicks sporting goods",
+    "academy sports",
+    "rei",
+    "bass pro shops",
+    "cabelas",
+    "gap",
+    "old navy",
+    "h&m",
+    "zara",
+    "forever 21",
+    "lululemon",
+    "foot locker",
+    "finish line",
+    "petco",
+    "petsmart",
+    "pet supplies plus",
+    "ulta",
+    "sephora",
+    "sally beauty",
+    "whole foods",
+    "trader joes",
+    "sprouts",
+    "fleet feet",
+    "road runner sports",
+    "trek bicycle",
+    "performance bicycle",
+    "camping world",
+    "buy buy baby",
+    "carters",
+    "oshkosh",
+    "williams sonoma",
+    "sur la table",
+    "crate and barrel",
+    "bed bath beyond"
+  ],
+  "chain_filter": {
+    "max_cities": 8
+  },
+  "ecommerce": {
+    "concurrency": 5,
+    "pages_to_check": 3
+  },
+  "search": {
+    "concurrency": 5
   }
 }

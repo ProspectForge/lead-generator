@@ -1,7 +1,8 @@
 # src/__main__.py
 import asyncio
-import signal
 import sys
+from datetime import datetime
+from pathlib import Path
 import typer
 from typing import Optional
 from rich.console import Console
@@ -17,36 +18,18 @@ from src.config import settings
 app = typer.Typer(help="Lead Generator - Find omnichannel retail leads")
 console = Console()
 
-# Track if we're in the middle of a pipeline run
-_pipeline_running = False
-
-
-def handle_interrupt(signum, frame):
-    """Handle Ctrl+C gracefully."""
-    global _pipeline_running
-
-    console.print("\n")
-
-    if _pipeline_running:
-        console.print("[yellow]⚠ Pipeline interrupted![/yellow]")
-        if Confirm.ask("[yellow]Do you want to exit?[/yellow]", default=False):
-            console.print("[red]Exiting...[/red]")
-            sys.exit(1)
-        else:
-            console.print("[green]Continuing...[/green]")
-            return
-    else:
-        console.print("[yellow]Exiting...[/yellow]")
-        sys.exit(0)
-
-
-# Register the signal handler
-signal.signal(signal.SIGINT, handle_interrupt)
-
 VERTICALS = {
     "health_wellness": "Health & Wellness (supplements, vitamins, nutrition)",
     "sporting_goods": "Sporting Goods (outdoor gear, athletics, equipment)",
     "apparel": "Apparel (clothing, fashion, boutiques)",
+    "pet_supplies": "Pet Supplies (pet food, accessories, grooming)",
+    "beauty_cosmetics": "Beauty & Cosmetics (makeup, skincare, beauty supplies)",
+    "specialty_food": "Specialty Food (gourmet, cheese, spices)",
+    "running_athletic": "Running & Athletic (running, triathlon, marathon)",
+    "cycling": "Cycling (bikes, cycling gear, accessories)",
+    "outdoor_camping": "Outdoor & Camping (camping, hiking, backpacking)",
+    "baby_kids": "Baby & Kids (baby products, children's clothing)",
+    "home_goods": "Home Goods (kitchenware, cookware, home products)",
 }
 
 COUNTRIES = {
@@ -64,6 +47,117 @@ def show_banner():
 ╚═══════════════════════════════════════════════════════════════╝
     """
     console.print(banner, style="bold blue")
+
+
+def format_timestamp(ts: str) -> str:
+    """Format ISO timestamp to human-readable."""
+    try:
+        dt = datetime.fromisoformat(ts)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return ts or "Unknown"
+
+
+def show_checkpoint_table(checkpoints: list[dict]):
+    """Display a table of available checkpoints."""
+    table = Table(title="Available Checkpoints", box=box.ROUNDED)
+    table.add_column("#", style="dim", width=3, justify="right")
+    table.add_column("Stage", style="cyan", width=15)
+    table.add_column("Verticals", style="green")
+    table.add_column("Countries", style="blue")
+    table.add_column("Progress", style="magenta")
+    table.add_column("Saved At", style="yellow")
+
+    for i, cp in enumerate(checkpoints, 1):
+        # Format verticals nicely
+        vert_names = [VERTICALS.get(v, v).split(" (")[0] for v in cp["verticals"]]
+
+        # Format countries nicely
+        country_names = [COUNTRIES.get(c, c).split(" (")[0] for c in cp["countries"]]
+
+        # Progress summary
+        progress = f"{cp['places_count']} places"
+        if cp["brands_count"] > 0:
+            progress += f" → {cp['brands_count']} brands"
+        if cp["verified_count"] > 0:
+            progress += f" → {cp['verified_count']} verified"
+        if cp["ecommerce_count"] > 0:
+            progress += f" → {cp['ecommerce_count']} e-commerce"
+
+        table.add_row(
+            str(i),
+            f"Stage {cp['stage']}: {cp['stage_name']}",
+            ", ".join(vert_names),
+            ", ".join(country_names),
+            progress,
+            format_timestamp(cp["timestamp"]),
+        )
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def select_checkpoint(pipeline: Pipeline) -> Optional[Path]:
+    """Prompt user to select a checkpoint or start fresh."""
+    checkpoints = pipeline.list_checkpoints()
+
+    if not checkpoints:
+        return None
+
+    console.print("\n[bold yellow]Previous runs found![/bold yellow]")
+    show_checkpoint_table(checkpoints)
+
+    # Build choices for inquirer
+    choices = [
+        {"name": "Start fresh (new run)", "value": "fresh"},
+    ]
+
+    for i, cp in enumerate(checkpoints):
+        vert_names = [VERTICALS.get(v, v).split(" (")[0] for v in cp["verticals"]]
+        country_names = [COUNTRIES.get(c, c).split(" (")[0] for c in cp["countries"]]
+        label = (
+            f"Resume #{i+1}: Stage {cp['stage']} ({cp['stage_name']}) - "
+            f"{', '.join(vert_names)} in {', '.join(country_names)}"
+        )
+        choices.append({"name": label, "value": cp["path"]})
+
+    # Add delete and exit options
+    choices.append({"name": "Delete a checkpoint", "value": "delete"})
+    choices.append({"name": "Exit", "value": "exit"})
+
+    selection = inquirer.select(
+        message="What would you like to do?",
+        choices=choices,
+        instruction="(↑↓ navigate, Enter select)",
+    ).execute()
+
+    if selection == "fresh":
+        return None
+    elif selection == "exit":
+        console.print("[yellow]Exiting...[/yellow]")
+        raise typer.Exit(0)
+    elif selection == "delete":
+        # Let user select which checkpoint to delete
+        delete_choices = [
+            {"name": f"#{i+1}: Stage {cp['stage']} - {format_timestamp(cp['timestamp'])}", "value": cp["path"]}
+            for i, cp in enumerate(checkpoints)
+        ]
+        delete_choices.append({"name": "Cancel", "value": "cancel"})
+
+        to_delete = inquirer.select(
+            message="Select checkpoint to delete:",
+            choices=delete_choices,
+        ).execute()
+
+        if to_delete != "cancel":
+            pipeline.delete_checkpoint(to_delete)
+            console.print(f"[green]✓ Checkpoint deleted[/green]")
+
+        # Recursively ask again
+        return select_checkpoint(pipeline)
+    else:
+        return selection
 
 
 def show_summary(verticals: list[str], countries: list[str]):
@@ -112,7 +206,7 @@ def run(
     verticals: str = typer.Option(
         "all",
         "--verticals", "-v",
-        help="Verticals to search: all, health_wellness, sporting_goods, apparel (comma-separated)"
+        help="Verticals: all, or comma-separated list (health_wellness, sporting_goods, apparel, pet_supplies, beauty_cosmetics, specialty_food, running_athletic, cycling, outdoor_camping, baby_kids, home_goods)"
     ),
     countries: str = typer.Option(
         "us,ca",
@@ -122,6 +216,34 @@ def run(
 ):
     """Run the full lead generation pipeline."""
     show_banner()
+
+    # Initialize pipeline to check for checkpoints
+    pipeline = Pipeline()
+    resume_checkpoint: Optional[Path] = None
+
+    # Check for existing checkpoints in interactive mode
+    if interactive and pipeline.has_checkpoints():
+        resume_checkpoint = select_checkpoint(pipeline)
+
+        if resume_checkpoint:
+            # If resuming, skip vertical/country selection
+            console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
+
+            try:
+                output_file = asyncio.run(pipeline.run(resume_checkpoint=resume_checkpoint))
+
+                # Final summary
+                console.print()
+                console.print(Panel(
+                    f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
+                    f"Output saved to:\n[cyan]{output_file}[/cyan]",
+                    title="Success",
+                    border_style="green",
+                ))
+                return
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Pipeline interrupted. Progress saved to checkpoint.[/yellow]")
+                raise typer.Exit(1)
 
     if interactive:
         # Interactive vertical selection
@@ -133,6 +255,14 @@ def run(
                 {"name": VERTICALS["health_wellness"], "value": "health_wellness"},
                 {"name": VERTICALS["sporting_goods"], "value": "sporting_goods"},
                 {"name": VERTICALS["apparel"], "value": "apparel"},
+                {"name": VERTICALS["pet_supplies"], "value": "pet_supplies"},
+                {"name": VERTICALS["beauty_cosmetics"], "value": "beauty_cosmetics"},
+                {"name": VERTICALS["specialty_food"], "value": "specialty_food"},
+                {"name": VERTICALS["running_athletic"], "value": "running_athletic"},
+                {"name": VERTICALS["cycling"], "value": "cycling"},
+                {"name": VERTICALS["outdoor_camping"], "value": "outdoor_camping"},
+                {"name": VERTICALS["baby_kids"], "value": "baby_kids"},
+                {"name": VERTICALS["home_goods"], "value": "home_goods"},
             ],
             instruction="(↑↓ navigate, Space select, Enter confirm)",
         ).execute()
@@ -164,7 +294,7 @@ def run(
     else:
         # Parse from command line
         if verticals == "all":
-            vertical_list = ["health_wellness", "sporting_goods", "apparel"]
+            vertical_list = list(VERTICALS.keys())
         else:
             vertical_list = [v.strip() for v in verticals.split(",")]
 
@@ -185,11 +315,7 @@ def run(
     console.print()
     console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
-    global _pipeline_running
-    _pipeline_running = True
-
     try:
-        pipeline = Pipeline()
         output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list))
 
         # Final summary
@@ -201,10 +327,8 @@ def run(
             border_style="green",
         ))
     except KeyboardInterrupt:
-        console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
+        console.print("\n[yellow]Pipeline interrupted. Progress saved to checkpoint.[/yellow]")
         raise typer.Exit(1)
-    finally:
-        _pipeline_running = False
 
 
 @app.command()
@@ -223,6 +347,14 @@ def search(
                 {"name": VERTICALS["health_wellness"], "value": "health_wellness"},
                 {"name": VERTICALS["sporting_goods"], "value": "sporting_goods"},
                 {"name": VERTICALS["apparel"], "value": "apparel"},
+                {"name": VERTICALS["pet_supplies"], "value": "pet_supplies"},
+                {"name": VERTICALS["beauty_cosmetics"], "value": "beauty_cosmetics"},
+                {"name": VERTICALS["specialty_food"], "value": "specialty_food"},
+                {"name": VERTICALS["running_athletic"], "value": "running_athletic"},
+                {"name": VERTICALS["cycling"], "value": "cycling"},
+                {"name": VERTICALS["outdoor_camping"], "value": "outdoor_camping"},
+                {"name": VERTICALS["baby_kids"], "value": "baby_kids"},
+                {"name": VERTICALS["home_goods"], "value": "home_goods"},
             ],
         ).execute()
 
@@ -241,18 +373,63 @@ def search(
     console.print(f"[bold]Country:[/bold] {COUNTRIES.get(country, country)}\n")
     console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
-    global _pipeline_running
-    _pipeline_running = True
-
     try:
         pipeline = Pipeline()
         results = asyncio.run(pipeline.stage_1_search([vertical], [country]))
         console.print(f"\n[green]✓ Found {len(results)} places[/green]")
     except KeyboardInterrupt:
-        console.print("\n[yellow]Search interrupted by user.[/yellow]")
+        console.print("\n[yellow]Search interrupted.[/yellow]")
         raise typer.Exit(1)
-    finally:
-        _pipeline_running = False
+
+
+@app.command()
+def checkpoints():
+    """List and manage saved checkpoints."""
+    show_banner()
+
+    pipeline = Pipeline()
+    checkpoint_list = pipeline.list_checkpoints()
+
+    if not checkpoint_list:
+        console.print("[yellow]No checkpoints found.[/yellow]")
+        console.print("[dim]Run the pipeline to create checkpoints automatically.[/dim]")
+        return
+
+    show_checkpoint_table(checkpoint_list)
+
+    action = inquirer.select(
+        message="What would you like to do?",
+        choices=[
+            {"name": "Delete a checkpoint", "value": "delete"},
+            {"name": "Delete all checkpoints", "value": "delete_all"},
+            {"name": "Exit", "value": "exit"},
+        ],
+    ).execute()
+
+    if action == "delete":
+        delete_choices = [
+            {"name": f"#{i+1}: Stage {cp['stage']} ({cp['stage_name']}) - {format_timestamp(cp['timestamp'])}", "value": cp["path"]}
+            for i, cp in enumerate(checkpoint_list)
+        ]
+        delete_choices.append({"name": "Cancel", "value": "cancel"})
+
+        to_delete = inquirer.select(
+            message="Select checkpoint to delete:",
+            choices=delete_choices,
+        ).execute()
+
+        if to_delete != "cancel":
+            pipeline.delete_checkpoint(to_delete)
+            console.print(f"[green]✓ Checkpoint deleted[/green]")
+
+    elif action == "delete_all":
+        if Confirm.ask("[bold red]Delete all checkpoints?[/bold red]", default=False):
+            for cp in checkpoint_list:
+                pipeline.delete_checkpoint(cp["path"])
+            console.print(f"[green]✓ All checkpoints deleted[/green]")
+
+    elif action == "exit":
+        console.print("[dim]Goodbye![/dim]")
 
 
 if __name__ == "__main__":
