@@ -3,15 +3,24 @@ import json
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 @dataclass
+class LLMSettings:
+    enabled: bool = False
+    provider: str = "openai"
+    model: str = "gpt-4o-mini"
+
+
+@dataclass
 class Settings:
     google_places_api_key: str = ""
     firecrawl_api_key: str = ""
+    openai_api_key: str = ""
     cities: dict = field(default_factory=dict)
     search_queries: dict = field(default_factory=dict)
     known_large_chains: set = field(default_factory=set)
@@ -19,10 +28,12 @@ class Settings:
     ecommerce_concurrency: int = 10
     ecommerce_pages_to_check: int = 3
     search_concurrency: int = 10
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
 
         config_path = Path(__file__).parent.parent / "config" / "cities.json"
         with open(config_path) as f:
@@ -38,6 +49,24 @@ class Settings:
         self.ecommerce_concurrency = config.get("ecommerce", {}).get("concurrency", 10)
         self.ecommerce_pages_to_check = config.get("ecommerce", {}).get("pages_to_check", 3)
         self.search_concurrency = config.get("search", {}).get("concurrency", 10)
+
+        # Load LLM settings
+        llm_config = config.get("llm", {})
+        self.llm = LLMSettings(
+            enabled=llm_config.get("enabled", False),
+            provider=llm_config.get("provider", "openai"),
+            model=llm_config.get("model", "gpt-4o-mini")
+        )
+
+    def get_all_city_names(self) -> list[str]:
+        """Returns all city names (just the city part, without state/province)."""
+        city_names = []
+        for region_cities in self.cities.values():
+            for city_full in region_cities:
+                # Split on comma to get just the city name
+                city_name = city_full.split(",")[0].strip()
+                city_names.append(city_name)
+        return city_names
 
 
 settings = Settings()
