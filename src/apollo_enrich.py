@@ -145,11 +145,12 @@ class ApolloEnricher:
     ) -> list[ApolloContact]:
         """Search for decision-maker contacts at a company."""
         contacts = []
+        clean_domain = domain.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
 
         try:
-            # Search for people at the company with target titles
-            data = await self._make_request("mixed_people/search", {
-                "q_organization_domains": domain.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0],
+            # Step 1: Search for people (returns obfuscated data)
+            data = await self._make_request("mixed_people/api_search", {
+                "q_organization_domains": clean_domain,
                 "person_titles": self.TARGET_TITLES,
                 "page": 1,
                 "per_page": max_contacts,
@@ -157,14 +158,38 @@ class ApolloEnricher:
 
             people = data.get("people", [])
 
+            # Step 2: Reveal each contact to get full details
             for person in people[:max_contacts]:
-                contacts.append(ApolloContact(
-                    name=person.get("name", ""),
-                    email=person.get("email"),
-                    phone=person.get("phone_numbers", [{}])[0].get("sanitized_number") if person.get("phone_numbers") else None,
-                    title=person.get("title", ""),
-                    linkedin_url=person.get("linkedin_url"),
-                ))
+                person_id = person.get("id")
+                if not person_id:
+                    continue
+
+                try:
+                    # Use people/match to reveal full contact details
+                    match_data = await self._make_request("people/match", {
+                        "id": person_id,
+                        "reveal_personal_emails": True,
+                    })
+
+                    revealed = match_data.get("person", {})
+                    if revealed:
+                        contacts.append(ApolloContact(
+                            name=revealed.get("name", ""),
+                            email=revealed.get("email"),
+                            phone=revealed.get("phone_numbers", [{}])[0].get("sanitized_number") if revealed.get("phone_numbers") else None,
+                            title=revealed.get("title", ""),
+                            linkedin_url=revealed.get("linkedin_url"),
+                        ))
+                except Exception:
+                    # If reveal fails, use partial data from search
+                    first_name = person.get("first_name", "")
+                    contacts.append(ApolloContact(
+                        name=first_name,
+                        email=None,
+                        phone=None,
+                        title=person.get("title", ""),
+                        linkedin_url=None,
+                    ))
 
         except Exception:
             pass
