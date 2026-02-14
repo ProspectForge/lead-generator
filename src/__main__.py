@@ -340,32 +340,68 @@ def _show_api_help():
 
 
 def _interactive_new_run():
-    """Run the full interactive pipeline setup."""
+    """Run the full interactive pipeline setup with back navigation."""
     console.print()
+    nav.push("new_run")
+
+    vertical_list = None
+    country_list = None
 
     # Step 1: Verticals
-    console.print("[bold cyan]Step 1:[/bold cyan] Select retail verticals to search\n")
-    vertical_list = inquirer.checkbox(
-        message="Select verticals (Space to select, Enter to confirm):",
-        choices=[{"name": VERTICALS[k], "value": k} for k in VERTICALS],
-        instruction="(↑↓ navigate, Space select, Enter confirm)",
-    ).execute()
+    while True:
+        console.print("[bold cyan]Step 1:[/bold cyan] Select retail verticals to search\n")
 
-    if not vertical_list:
-        console.print("[red]No verticals selected. Returning to menu.[/red]")
-        return
+        vertical_choices = [{"name": VERTICALS[k], "value": k} for k in VERTICALS]
+        vertical_choices.append(Separator())
+        vertical_choices.append({"name": MAIN_MENU_OPTION, "value": "main_menu"})
+
+        result = inquirer.checkbox(
+            message="Select verticals (Space to select, Enter to confirm):",
+            choices=vertical_choices,
+            instruction="(↑↓ navigate, Space select, Enter confirm)",
+        ).execute()
+
+        if "main_menu" in result:
+            nav.clear()
+            return
+
+        vertical_list = [v for v in result if v != "main_menu"]
+        if not vertical_list:
+            console.print("[red]No verticals selected. Please select at least one.[/red]")
+            continue
+
+        break
 
     # Step 2: Countries
-    console.print("\n[bold cyan]Step 2:[/bold cyan] Select countries to search\n")
-    country_list = inquirer.checkbox(
-        message="Select countries (Space to select, Enter to confirm):",
-        choices=[{"name": COUNTRIES[k], "value": k} for k in COUNTRIES],
-        instruction="(↑↓ navigate, Space select, Enter confirm)",
-    ).execute()
+    while True:
+        console.print("\n[bold cyan]Step 2:[/bold cyan] Select countries to search\n")
 
-    if not country_list:
-        console.print("[red]No countries selected. Returning to menu.[/red]")
-        return
+        country_choices = [{"name": COUNTRIES[k], "value": k} for k in COUNTRIES]
+        country_choices.append(Separator())
+        country_choices.append({"name": BACK_OPTION, "value": "back"})
+        country_choices.append({"name": MAIN_MENU_OPTION, "value": "main_menu"})
+
+        result = inquirer.checkbox(
+            message="Select countries (Space to select, Enter to confirm):",
+            choices=country_choices,
+            instruction="(↑↓ navigate, Space select, Enter confirm)",
+        ).execute()
+
+        if "main_menu" in result:
+            nav.clear()
+            return
+
+        if "back" in result:
+            # Go back to step 1 by restarting the function
+            nav.clear()
+            return _interactive_new_run()
+
+        country_list = [c for c in result if c not in ("back", "main_menu")]
+        if not country_list:
+            console.print("[red]No countries selected. Please select at least one.[/red]")
+            continue
+
+        break
 
     # Normalize
     country_list = ["canada" if c == "ca" else c for c in country_list]
@@ -379,9 +415,20 @@ def _interactive_new_run():
             {"name": "LinkedIn (free, web scraping)", "value": "linkedin"},
             {"name": "Apollo.io (paid, requires API key)", "value": "apollo"},
             {"name": "Skip enrichment", "value": "skip"},
+            Separator(),
+            {"name": BACK_OPTION, "value": "back"},
+            {"name": MAIN_MENU_OPTION, "value": "main_menu"},
         ],
         default="linkedin",
     ).execute()
+
+    if enrichment_choice == "main_menu":
+        nav.clear()
+        return
+
+    if enrichment_choice == "back":
+        nav.clear()
+        return _interactive_new_run()
 
     if enrichment_choice == "skip":
         settings.enrichment.enabled = False
@@ -404,12 +451,33 @@ def _interactive_new_run():
             default=False,
         ).execute()
 
-    # Show summary
+    # Step 4: Confirmation
     show_summary(vertical_list, country_list)
 
-    # Confirm
-    if not Confirm.ask("[bold yellow]Start the pipeline?[/bold yellow]", default=True):
+    confirm_choices = [
+        {"name": "✅ Yes, start the pipeline", "value": "start"},
+        {"name": "❌ No, cancel", "value": "cancel"},
+        Separator(),
+        {"name": BACK_OPTION, "value": "back"},
+        {"name": MAIN_MENU_OPTION, "value": "main_menu"},
+    ]
+
+    confirm = inquirer.select(
+        message="Start the pipeline?",
+        choices=confirm_choices,
+    ).execute()
+
+    if confirm == "main_menu":
+        nav.clear()
+        return
+
+    if confirm == "back":
+        nav.clear()
+        return _interactive_new_run()
+
+    if confirm == "cancel":
         console.print("[yellow]Cancelled.[/yellow]")
+        nav.clear()
         return
 
     console.print()
@@ -428,6 +496,8 @@ def _interactive_new_run():
         ))
     except KeyboardInterrupt:
         console.print("\n[yellow]Pipeline interrupted. Progress saved to checkpoint.[/yellow]")
+    finally:
+        nav.clear()
 
 
 def _interactive_resume_run(pipeline: Pipeline, checkpoints: list):
