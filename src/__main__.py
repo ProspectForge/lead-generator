@@ -676,9 +676,21 @@ def _browse_leads_interactive(df):
             website = str(row.get('website', ''))[:25]
             locs = row.get('location_count', '?')
 
-            # Contact indicator
-            has_contacts = pd.notna(row.get('contact_1_name'))
-            contact_icon = "👤" if has_contacts else "  "
+            # Contact and email indicators
+            contact_count = 0
+            email_count = 0
+            for j in range(1, 5):
+                if pd.notna(row.get(f'contact_{j}_name')) and str(row.get(f'contact_{j}_name')).strip():
+                    contact_count += 1
+                    if pd.notna(row.get(f'contact_{j}_email')) and str(row.get(f'contact_{j}_email')).strip():
+                        email_count += 1
+
+            if email_count > 0:
+                contact_icon = f"📧{email_count}"  # Has verified emails
+            elif contact_count > 0:
+                contact_icon = f"👤{contact_count}"  # Has contacts but no emails
+            else:
+                contact_icon = "   "
 
             # LinkedIn indicator
             has_linkedin = pd.notna(row.get('linkedin_company'))
@@ -691,7 +703,7 @@ def _browse_leads_interactive(df):
             else:
                 platform_icon = "  "
 
-            label = f"{idx+1:3}. {contact_icon}{linkedin_icon}{platform_icon} {brand:<28} │ {locs} locs │ {website}"
+            label = f"{idx+1:3}. {contact_icon:<4}{linkedin_icon}{platform_icon} {brand:<26} │ {locs} locs │ {website}"
             choices.append({"name": label, "value": idx})
 
         # Add navigation options
@@ -706,7 +718,7 @@ def _browse_leads_interactive(df):
         choices.append({"name": "🔢 Jump to lead #", "value": "jump"})
         choices.append({"name": "← Back to menu", "value": "back"})
 
-        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) │ 👤=contacts 🔗=LinkedIn 🛒=platform detected[/dim]")
+        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) │ 📧=verified emails 👤=contacts 🔗=LinkedIn 🛒=e-commerce[/dim]")
 
         selected = inquirer.select(
             message="Select a lead (↑↓ scroll, Enter to view):",
@@ -827,6 +839,13 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
             platform = str(row.get("ecommerce_platform")).title()
             info_table.add_row("Platform", f"[bold magenta]{platform}[/bold magenta]")
 
+        # Apollo enrichment data
+        if pd.notna(row.get("industry")) and str(row.get("industry")).strip():
+            info_table.add_row("Industry", f"[cyan]{row.get('industry')}[/cyan]")
+
+        if pd.notna(row.get("employee_count")) and str(row.get("employee_count")).strip():
+            info_table.add_row("Employees", f"[green]{row.get('employee_count'):,}[/green]" if isinstance(row.get("employee_count"), (int, float)) else str(row.get("employee_count")))
+
         if pd.notna(row.get("cities")):
             info_table.add_row("Cities", str(row.get("cities", ""))[:60])
 
@@ -851,17 +870,23 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
             contact_table = Table(box=box.ROUNDED)
             contact_table.add_column("Name", style="cyan")
             contact_table.add_column("Title")
+            contact_table.add_column("Email", style="green")
+            contact_table.add_column("Phone", style="yellow")
             contact_table.add_column("LinkedIn")
 
             for i in range(1, 5):
                 name = row.get(f"contact_{i}_name")
-                if pd.notna(name):
+                if pd.notna(name) and str(name).strip():
                     title = row.get(f"contact_{i}_title", "")
+                    email = row.get(f"contact_{i}_email", "")
+                    phone = row.get(f"contact_{i}_phone", "")
                     linkedin = row.get(f"contact_{i}_linkedin", "")
                     contact_table.add_row(
                         str(name),
                         str(title) if pd.notna(title) else "",
-                        str(linkedin)[:50] if pd.notna(linkedin) else ""
+                        str(email) if pd.notna(email) and str(email).strip() else "[dim]-[/dim]",
+                        str(phone) if pd.notna(phone) and str(phone).strip() else "[dim]-[/dim]",
+                        str(linkedin)[:40] + "..." if pd.notna(linkedin) and len(str(linkedin)) > 40 else (str(linkedin) if pd.notna(linkedin) else "")
                     )
 
             console.print(contact_table)
