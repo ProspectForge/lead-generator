@@ -1,6 +1,7 @@
 # src/brand_grouper.py
 import json
 import re
+import httpx
 from dataclasses import dataclass, field
 from typing import Optional
 from collections import defaultdict
@@ -11,6 +12,34 @@ try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
+
+
+def resolve_redirect(url: str, timeout: float = 5.0) -> str:
+    """
+    Follow URL redirects and return the final URL.
+
+    Args:
+        url: The URL to resolve
+        timeout: Timeout in seconds for the request
+
+    Returns:
+        The final URL after following redirects, or original URL on error
+    """
+    if not url:
+        return url
+
+    # Ensure URL has a scheme
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    try:
+        # Use HEAD request with follow_redirects to get final URL
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            response = client.head(url)
+            return str(response.url)
+    except Exception:
+        # On any error, return the original URL
+        return url
 
 
 class NameNormalizer:
@@ -283,14 +312,31 @@ class BrandGroup:
 class BrandGrouper:
     """Groups places by brand using multi-layer normalization and domain matching."""
 
-    def __init__(self, min_locations: int = 3, max_locations: int = 10):
+    def __init__(self, min_locations: int = 3, max_locations: int = 10, resolve_redirects: bool = False):
         self.min_locations = min_locations
         self.max_locations = max_locations
         self.normalizer = NameNormalizer()
+        self.resolve_redirects = resolve_redirects
+        self._redirect_cache: dict[str, str] = {}  # Cache resolved URLs
+
+    def _resolve_url(self, url: str) -> str:
+        """Resolve URL redirects if enabled, with caching."""
+        if not url or not self.resolve_redirects:
+            return url
+
+        if url not in self._redirect_cache:
+            try:
+                self._redirect_cache[url] = resolve_redirect(url)
+            except Exception:
+                # On any error, fall back to original URL
+                self._redirect_cache[url] = url
+
+        return self._redirect_cache[url]
 
     def _get_domain(self, url: str) -> str:
-        """Extract normalized domain from URL."""
-        return self.normalizer.extract_domain_hint(url)
+        """Extract normalized domain from URL (after resolving redirects if enabled)."""
+        resolved_url = self._resolve_url(url)
+        return self.normalizer.extract_domain_hint(resolved_url)
 
     def _get_group_key(self, name: str, website: str) -> tuple[str, str]:
         """Generate grouping key from name and website."""

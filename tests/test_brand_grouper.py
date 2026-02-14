@@ -277,3 +277,61 @@ class TestFullPipeline:
 
         assert len(groups) == 1
         assert groups[0].location_count == 3
+
+
+class TestURLRedirection:
+    """Tests for URL redirection handling during brand grouping."""
+
+    @patch('src.brand_grouper.resolve_redirect')
+    def test_groups_by_final_redirect_url(self, mock_resolve):
+        """Different URLs that redirect to the same domain should be grouped."""
+        # Mock redirects: both URLs redirect to popeyescanada.com
+        def mock_redirect(url):
+            redirects = {
+                "https://popeyestoronto.com": "https://popeyescanada.com",
+                "https://popeyesvancouver.com": "https://popeyescanada.com",
+                "https://popeyescanada.com": "https://popeyescanada.com",
+            }
+            return redirects.get(url, url)
+
+        mock_resolve.side_effect = mock_redirect
+
+        places = [
+            {"name": "Popeye's Supplements Toronto", "website": "https://popeyestoronto.com", "city": "Toronto, ON"},
+            {"name": "Popeye's Supplements Vancouver", "website": "https://popeyesvancouver.com", "city": "Vancouver, BC"},
+            {"name": "Popeye's Supplements", "website": "https://popeyescanada.com", "city": "Montreal, QC"},
+        ]
+
+        grouper = BrandGrouper(resolve_redirects=True)
+        groups = grouper.group(places)
+
+        # All three should be grouped together due to redirect resolution
+        assert len(groups) == 1
+        assert groups[0].location_count == 3
+        assert "popeye" in groups[0].normalized_name.lower()
+
+    @patch('src.brand_grouper.resolve_redirect')
+    def test_handles_redirect_timeout(self, mock_resolve):
+        """Should fall back to original URL if redirect resolution fails."""
+        def mock_redirect(url):
+            if "slow" in url:
+                raise TimeoutError("Connection timed out")
+            return url
+
+        mock_resolve.side_effect = mock_redirect
+
+        places = [
+            {"name": "Fast Store", "website": "https://faststore.com", "city": "Toronto, ON"},
+            {"name": "Slow Store", "website": "https://slowstore.com", "city": "Vancouver, BC"},
+        ]
+
+        grouper = BrandGrouper(resolve_redirects=True)
+        groups = grouper.group(places)
+
+        # Should still work, just with original URLs
+        assert len(groups) == 2
+
+    def test_redirect_disabled_by_default(self):
+        """Redirect resolution should be disabled by default for performance."""
+        grouper = BrandGrouper()
+        assert getattr(grouper, 'resolve_redirects', False) == False
