@@ -672,14 +672,12 @@ def _browse_leads_interactive(df):
         choices = []
         for i, (_, row) in enumerate(page_df.iterrows()):
             idx = start_idx + i
-            brand = str(row.get('brand_name', 'Unknown'))[:30]
-            website = str(row.get('website', ''))[:25]
+            brand = str(row.get('brand_name', 'Unknown'))[:28]
+            website = str(row.get('website', ''))[:30]
             locs = row.get('location_count', '?')
 
-            # Build indicators as fixed-width badges
-            badges = []
-
-            # Contact and email indicators
+            # Build fixed-width status indicators (4 chars each: icon + space)
+            # E=has emails, C=has contacts only, L=LinkedIn, P=platform
             contact_count = 0
             email_count = 0
             for j in range(1, 5):
@@ -688,25 +686,15 @@ def _browse_leads_interactive(df):
                     if pd.notna(row.get(f'contact_{j}_email')) and str(row.get(f'contact_{j}_email')).strip():
                         email_count += 1
 
-            if email_count > 0:
-                badges.append(f"E:{email_count}")
-            elif contact_count > 0:
-                badges.append(f"C:{contact_count}")
+            # Use single-char indicators for consistent width
+            e_flag = f"E{email_count}" if email_count > 0 else ("C" + str(contact_count) if contact_count > 0 else "--")
+            l_flag = "L" if pd.notna(row.get('linkedin_company')) and str(row.get('linkedin_company')).strip() else "-"
+            p_flag = "P" if pd.notna(row.get('ecommerce_platform')) and str(row.get('ecommerce_platform')).strip() else "-"
 
-            # LinkedIn indicator
-            if pd.notna(row.get('linkedin_company')) and str(row.get('linkedin_company')).strip():
-                badges.append("LI")
+            # Fixed format: [E2 L P] or [-- - -]
+            status = f"[{e_flag:>2} {l_flag} {p_flag}]"
 
-            # Platform indicator
-            platform = row.get('ecommerce_platform', '')
-            if pd.notna(platform) and str(platform).strip():
-                badges.append("EC")
-
-            # Format badges with fixed width
-            badge_str = " ".join(badges) if badges else ""
-            badge_str = f"[{badge_str}]" if badge_str else "      "
-
-            label = f"{idx+1:3}. {badge_str:<12} {brand:<25} | {locs:>2} locs | {website}"
+            label = f"{idx+1:3}. {status} {brand:<28} {locs:>2} locs  {website}"
             choices.append({"name": label, "value": idx})
 
         # Add navigation options
@@ -721,7 +709,7 @@ def _browse_leads_interactive(df):
         choices.append({"name": "🔢 Jump to lead #", "value": "jump"})
         choices.append({"name": "← Back to menu", "value": "back"})
 
-        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) | E:n=emails C:n=contacts LI=LinkedIn EC=e-commerce[/dim]")
+        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) | [En=emails Cn=contacts L=LinkedIn P=platform][/dim]")
 
         selected = inquirer.select(
             message="Select a lead (↑↓ scroll, Enter to view):",
