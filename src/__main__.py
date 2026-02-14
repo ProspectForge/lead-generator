@@ -57,6 +57,8 @@ def interactive_main_menu():
     import pandas as pd
 
     show_banner()
+    nav.clear()  # Ensure clean state at main menu
+    nav.push("main")
 
     # Check for existing results and checkpoints
     output_dirs = [Path("output"), Path("data/output")]
@@ -110,6 +112,8 @@ def interactive_main_menu():
         "value": "settings"
     })
 
+    menu_choices.append(Separator())
+
     menu_choices.append({
         "name": "❌ Exit",
         "value": "exit"
@@ -129,36 +133,35 @@ def interactive_main_menu():
 
         elif action == "new_run":
             _interactive_new_run()
-            # After run completes, refresh menu
-            break
+            nav.clear()
+            nav.push("main")
 
         elif action == "resume":
             _interactive_resume_run(pipeline, checkpoints)
-            break
+            nav.clear()
+            nav.push("main")
 
         elif action == "results":
             _interactive_results()
-            # Don't break - allow returning to menu
+            nav.clear()
+            nav.push("main")
 
         elif action == "stats":
             _interactive_stats()
-            # Don't break - allow returning to menu
+            nav.clear()
+            nav.push("main")
 
         elif action == "checkpoints":
             _interactive_checkpoints(pipeline)
+            nav.clear()
+            nav.push("main")
             # Refresh checkpoints count
             checkpoints = pipeline.list_checkpoints()
-            # Update menu
-            for choice in menu_choices:
-                if choice["value"] == "checkpoints":
-                    if checkpoints:
-                        choice["name"] = f"💾 Manage checkpoints ({len(checkpoints)} saved)"
-                    else:
-                        menu_choices.remove(choice)
-                        break
 
         elif action == "settings":
             _show_settings_overview()
+            nav.clear()
+            nav.push("main")
 
 
 def _show_settings_overview():
