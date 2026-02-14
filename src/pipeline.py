@@ -515,6 +515,8 @@ class Pipeline:
                             "linkedin_company": result.company.linkedin_url or "",
                             "employee_count": result.company.employee_count or "",
                             "industry": result.company.industry or "",
+                            "technology_names": result.company.technology_names,
+                            "apollo_location_count": result.company.retail_location_count,
                         }
 
                         # Add contacts
