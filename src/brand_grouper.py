@@ -152,7 +152,6 @@ class BlocklistChecker:
 
         return False
 
-
 @dataclass
 class LLMAnalysisResult:
     """Result from LLM brand analysis."""
@@ -265,7 +264,6 @@ Rules:
             print(f"LLM analysis failed: {e}")
             return LLMAnalysisResult(merges=[], large_chains=[])
 
-
 @dataclass
 class BrandGroup:
     normalized_name: str
@@ -279,6 +277,8 @@ class BrandGroup:
     marketplaces: list[str] = field(default_factory=list)
     marketplace_links: dict[str, str] = field(default_factory=dict)
     priority: str = "medium"
+    ecommerce_platform: Optional[str] = None  # Detected platform (shopify, woocommerce, etc.)
+
 
 class BrandGrouper:
     """Groups places by brand using multi-layer normalization and domain matching."""

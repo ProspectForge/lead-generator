@@ -243,23 +243,40 @@ class Discovery:
                     "cities_found": cities_found
                 })
 
-        console.print(f"  [dim]Expanding {len(brands_to_expand)} promising brands...[/dim]")
+        brands_to_process = brands_to_expand[:BRANDS_TO_EXPAND_LIMIT]
+        console.print(f"  [dim]Expanding {len(brands_to_process)} promising brands...[/dim]")
 
-        # Expand each brand
-        for brand in brands_to_expand[:BRANDS_TO_EXPAND_LIMIT]:
-            # Only search cities we haven't already found
-            cities_to_search = [c for c in all_cities if c not in brand["cities_found"]]
+        if not brands_to_process:
+            return results
 
-            try:
-                expanded = await self.expander.expand_brand(
-                    brand_name=brand["name"],
-                    known_website=brand["website"],
-                    cities=cities_to_search,
-                    vertical=brand["vertical"]
-                )
-                results.extend(expanded)
-            except Exception as e:
-                if not _is_transient_error(e):
-                    logger.warning("Brand expansion failed for %s: %s", brand["name"], e)
+        # Expand each brand with progress indicator
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Expanding {len(brands_to_process)} brands...", total=len(brands_to_process))
+
+            for brand in brands_to_process:
+                progress.update(task, description=f"[cyan]Expanding[/cyan] {brand['name']}")
+
+                # Only search cities we haven't already found
+                cities_to_search = [c for c in all_cities if c not in brand["cities_found"]]
+
+                try:
+                    expanded = await self.expander.expand_brand(
+                        brand_name=brand["name"],
+                        known_website=brand["website"],
+                        cities=cities_to_search,
+                        vertical=brand["vertical"]
+                    )
+                    results.extend(expanded)
+                except Exception as e:
+                    if not _is_transient_error(e):
+                        logger.warning("Brand expansion failed for %s: %s", brand["name"], e)
+
+                progress.advance(task)
 
         return results

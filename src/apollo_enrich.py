@@ -69,12 +69,13 @@ class ApolloEnricher:
         self.headers = {
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
+            "X-Api-Key": api_key,
         }
 
     async def _make_request(self, endpoint: str, payload: dict) -> dict:
         """Make API request with retry logic."""
         url = f"{self.BASE_URL}/{endpoint}"
-        payload["api_key"] = self.api_key
+        # API key is passed via X-Api-Key header (set in __init__)
 
         last_error = None
         for attempt in range(self.MAX_RETRIES):

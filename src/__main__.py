@@ -934,15 +934,27 @@ def _interactive_stats():
         console.print(top_table)
 
     console.print()
-    inquirer.confirm(message="Press Enter to continue...", default=True).execute()
+    action = inquirer.select(
+        message="What next?",
+        choices=[
+            {"name": BACK_OPTION, "value": "back"},
+            {"name": MAIN_MENU_OPTION, "value": "main_menu"},
+        ],
+    ).execute()
+
+    if action == "main_menu":
+        nav.clear()
+    # "back" just returns normally
 
 
 def _interactive_checkpoints(pipeline: Pipeline):
     """Manage checkpoints interactively."""
+    nav.push("checkpoints")
     checkpoints = pipeline.list_checkpoints()
 
     if not checkpoints:
         console.print("[yellow]No checkpoints found.[/yellow]")
+        nav.pop()
         return
 
     console.print()
@@ -953,9 +965,19 @@ def _interactive_checkpoints(pipeline: Pipeline):
         choices=[
             {"name": "Delete a checkpoint", "value": "delete"},
             {"name": "Delete all checkpoints", "value": "delete_all"},
-            {"name": "Back to main menu", "value": "back"},
+            Separator(),
+            {"name": BACK_OPTION, "value": "back"},
+            {"name": MAIN_MENU_OPTION, "value": "main_menu"},
         ],
     ).execute()
+
+    if action == "back":
+        nav.pop()
+        return "back"
+
+    if action == "main_menu":
+        nav.clear()
+        return "main_menu"
 
     if action == "delete":
         choices = [
