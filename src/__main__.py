@@ -469,6 +469,8 @@ def _interactive_results():
     """Interactive results browser."""
     import pandas as pd
 
+    nav.push("results")
+
     output_dirs = [Path("output"), Path("data/output")]
     csv_files = []
     for output_dir in output_dirs:
@@ -476,6 +478,7 @@ def _interactive_results():
 
     if not csv_files:
         console.print("[yellow]No results found.[/yellow]")
+        nav.pop()
         return
 
     csv_files = sorted(csv_files, key=lambda p: p.stat().st_mtime, reverse=True)
@@ -506,14 +509,21 @@ def _interactive_results():
                 {"name": "🔎 Filter by column", "value": "filter"},
                 {"name": "↕️  Sort by column", "value": "sort"},
                 {"name": "💾 Export filtered results", "value": "export"},
-                {"name": "← Back to main menu", "value": "back"},
+                Separator(),
+                {"name": BACK_OPTION, "value": "back"},
+                {"name": MAIN_MENU_OPTION, "value": "main_menu"},
             ],
         ).execute()
 
         if action == "back":
-            break
+            nav.pop()
+            return "back"
 
-        elif action == "browse":
+        if action == "main_menu":
+            nav.clear()
+            return "main_menu"
+
+        if action == "browse":
             _browse_leads_interactive(df)
 
         elif action == "view":
