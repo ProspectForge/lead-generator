@@ -69,7 +69,9 @@ class Pipeline:
             2: "Grouping",
             2.5: "Verification",
             3: "E-commerce",
-            4: "LinkedIn",
+            4: "Enrichment",
+            5: "Scoring",
+            6: "Export",
         }
 
         for cp_file in sorted(self.checkpoint_dir.glob("checkpoint_*.json"), reverse=True):
