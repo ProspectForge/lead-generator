@@ -270,7 +270,7 @@ class Pipeline:
         self._show_stage_header(2, "Brand Grouping", "Normalizing names and grouping by brand")
 
         with console.status("[cyan]Analyzing brands...[/cyan]"):
-            grouper = BrandGrouper(min_locations=3, max_locations=10)
+            grouper = BrandGrouper(min_locations=3, max_locations=10, resolve_redirects=True)
             groups = grouper.group(places)
 
             # Apply blocklist filter
