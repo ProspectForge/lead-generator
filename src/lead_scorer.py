@@ -144,7 +144,7 @@ class LeadScorer:
         for tech in tech_stack:
             tech_lower = tech.lower()
             for pos in self.POS_PLATFORMS:
-                if pos.lower() in tech_lower or tech_lower in pos.lower():
+                if pos.lower() in tech_lower:
                     return pos
         return None
 

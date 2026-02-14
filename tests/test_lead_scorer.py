@@ -97,3 +97,26 @@ def test_multiple_marketplaces_bonus():
     score_two = scorer.score(lead_two_mp)
 
     assert score_two.priority_score > score_one.priority_score
+
+
+def test_score_leads_sorts_by_priority():
+    scorer = LeadScorer()
+
+    leads = [
+        {"brand_name": "Low Score", "location_count": 3, "technology_names": [], "marketplaces": "", "has_ecommerce": True, "contact_1_name": ""},
+        {"brand_name": "High Score", "location_count": 5, "technology_names": ["Lightspeed"], "marketplaces": "Amazon", "has_ecommerce": True, "contact_1_name": "John"},
+        {"brand_name": "Medium Score", "location_count": 4, "technology_names": ["Square"], "marketplaces": "", "has_ecommerce": True, "contact_1_name": "Jane"},
+    ]
+
+    scored = scorer.score_leads(leads)
+
+    # Should be sorted by priority_score descending
+    assert scored[0]["brand_name"] == "High Score"
+    assert scored[0]["priority_score"] > scored[1]["priority_score"]
+    assert scored[1]["priority_score"] > scored[2]["priority_score"]
+
+    # Should have scoring fields added
+    assert "pos_platform" in scored[0]
+    assert "uses_lightspeed" in scored[0]
+    assert "detected_marketplaces" in scored[0]
+    assert "priority_score" in scored[0]
