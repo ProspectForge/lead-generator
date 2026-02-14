@@ -737,12 +737,31 @@ class Pipeline:
         with console.status("[cyan]Writing CSV...[/cyan]"):
             df = pd.DataFrame(data)
 
-            # Sort: high priority first, then by location count descending
-            if 'priority' in df.columns:
-                priority_order = {'high': 0, 'medium': 1}
-                df['_priority_sort'] = df['priority'].map(priority_order)
-                df = df.sort_values(by=['_priority_sort', 'location_count'], ascending=[True, False])
-                df = df.drop(columns=['_priority_sort'])
+            # Define column order (priority columns first)
+            priority_cols = [
+                "priority_score", "uses_lightspeed", "pos_platform",
+                "brand_name", "location_count", "website",
+                "detected_marketplaces", "tech_stack",
+                "has_ecommerce", "ecommerce_platform", "marketplaces", "priority",
+                "cities", "linkedin_company", "employee_count", "industry",
+            ]
+
+            # Contact columns
+            contact_cols = []
+            for i in range(1, 5):
+                contact_cols.extend([
+                    f"contact_{i}_name", f"contact_{i}_title",
+                    f"contact_{i}_email", f"contact_{i}_phone", f"contact_{i}_linkedin"
+                ])
+
+            # Reorder columns (existing columns only)
+            ordered_cols = [c for c in priority_cols + contact_cols if c in df.columns]
+            remaining_cols = [c for c in df.columns if c not in ordered_cols]
+            df = df[ordered_cols + remaining_cols]
+
+            # Sort by priority_score descending
+            if 'priority_score' in df.columns:
+                df = df.sort_values(by='priority_score', ascending=False)
 
             output_file = self.output_dir / f"leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             df.to_csv(output_file, index=False)
