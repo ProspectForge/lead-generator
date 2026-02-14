@@ -676,6 +676,9 @@ def _browse_leads_interactive(df):
             website = str(row.get('website', ''))[:25]
             locs = row.get('location_count', '?')
 
+            # Build indicators as fixed-width badges
+            badges = []
+
             # Contact and email indicators
             contact_count = 0
             email_count = 0
@@ -686,24 +689,24 @@ def _browse_leads_interactive(df):
                         email_count += 1
 
             if email_count > 0:
-                contact_icon = f"📧{email_count}"  # Has verified emails
+                badges.append(f"E:{email_count}")
             elif contact_count > 0:
-                contact_icon = f"👤{contact_count}"  # Has contacts but no emails
-            else:
-                contact_icon = "   "
+                badges.append(f"C:{contact_count}")
 
             # LinkedIn indicator
-            has_linkedin = pd.notna(row.get('linkedin_company'))
-            linkedin_icon = "🔗" if has_linkedin else "  "
+            if pd.notna(row.get('linkedin_company')) and str(row.get('linkedin_company')).strip():
+                badges.append("LI")
 
-            # Platform indicator (Shopify, WooCommerce, etc.)
+            # Platform indicator
             platform = row.get('ecommerce_platform', '')
             if pd.notna(platform) and str(platform).strip():
-                platform_icon = "🛒"  # Shopping cart for any detected platform
-            else:
-                platform_icon = "  "
+                badges.append("EC")
 
-            label = f"{idx+1:3}. {contact_icon:<4}{linkedin_icon}{platform_icon} {brand:<26} │ {locs} locs │ {website}"
+            # Format badges with fixed width
+            badge_str = " ".join(badges) if badges else ""
+            badge_str = f"[{badge_str}]" if badge_str else "      "
+
+            label = f"{idx+1:3}. {badge_str:<12} {brand:<25} | {locs:>2} locs | {website}"
             choices.append({"name": label, "value": idx})
 
         # Add navigation options
@@ -718,7 +721,7 @@ def _browse_leads_interactive(df):
         choices.append({"name": "🔢 Jump to lead #", "value": "jump"})
         choices.append({"name": "← Back to menu", "value": "back"})
 
-        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) │ 📧=verified emails 👤=contacts 🔗=LinkedIn 🛒=e-commerce[/dim]")
+        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) | E:n=emails C:n=contacts LI=LinkedIn EC=e-commerce[/dim]")
 
         selected = inquirer.select(
             message="Select a lead (↑↓ scroll, Enter to view):",
