@@ -19,6 +19,7 @@ from src.ecommerce_check import EcommerceChecker
 from src.linkedin_enrich import LinkedInEnricher
 from src.apollo_enrich import ApolloEnricher
 from src.discovery import Discovery
+from src.lead_scorer import LeadScorer
 
 console = Console()
 
@@ -680,9 +681,48 @@ class Pipeline:
 
         return enriched
 
-    def stage_5_export(self, data: list[dict]) -> str:
+    def stage_5_score(self, enriched: list[dict]) -> list[dict]:
+        """Score leads based on tech stack and other signals."""
+        self._show_stage_header(5, "Lead Scoring", "Calculating priority scores based on tech stack")
+
+        if not enriched:
+            console.print("  [yellow]⚠ No leads to score[/yellow]")
+            return []
+
+        scorer = LeadScorer()
+
+        with console.status("[cyan]Scoring leads...[/cyan]"):
+            scored = scorer.score_leads(enriched)
+
+        # Summary statistics
+        lightspeed_count = sum(1 for lead in scored if lead.get("uses_lightspeed"))
+        with_pos = sum(1 for lead in scored if lead.get("pos_platform"))
+        with_marketplaces = sum(1 for lead in scored if lead.get("detected_marketplaces"))
+
+        # Show summary
+        table = Table(box=box.SIMPLE)
+        table.add_column("Signal", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Uses Lightspeed", f"[bold green]{lightspeed_count}[/bold green]")
+        table.add_row("Has POS platform data", str(with_pos))
+        table.add_row("Has marketplace presence", str(with_marketplaces))
+        console.print(table)
+
+        # Show top scored leads
+        if scored:
+            console.print(f"\n  [bold]Top 5 leads by priority score:[/bold]")
+            for lead in scored[:5]:
+                score = lead["priority_score"]
+                name = lead["brand_name"]
+                pos = lead.get("pos_platform", "")
+                ls_badge = "[green]LS[/green]" if lead.get("uses_lightspeed") else ""
+                console.print(f"    {score:>3}  {name} {ls_badge} {pos}")
+
+        return scored
+
+    def stage_6_export(self, data: list[dict]) -> str:
         """Export to CSV."""
-        self._show_stage_header(5, "Export", "Saving leads to CSV")
+        self._show_stage_header(6, "Export", "Saving leads to CSV")
 
         if not data:
             console.print("  [yellow]⚠ No data to export[/yellow]")
@@ -840,8 +880,11 @@ class Pipeline:
         else:
             console.print(f"  [dim]⏭ Skipping Stage 4 (LinkedIn) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
 
-        # Stage 5: Export
-        output_file = self.stage_5_export(enriched)
+        # Stage 5: Score leads
+        scored = self.stage_5_score(enriched)
+
+        # Stage 6: Export
+        output_file = self.stage_6_export(scored)
 
         # Clear checkpoint on successful completion
         self.clear_checkpoint()

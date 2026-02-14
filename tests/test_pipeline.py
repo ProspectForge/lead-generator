@@ -27,7 +27,8 @@ async def test_pipeline_runs_all_stages():
          patch.object(pipeline, 'stage_2b_verify_chain_size', new_callable=MagicMock) as mock_verify, \
          patch.object(pipeline, 'stage_3_ecommerce', new_callable=AsyncMock) as mock_ecom, \
          patch.object(pipeline, 'stage_4_enrich', new_callable=AsyncMock) as mock_enrich, \
-         patch.object(pipeline, 'stage_5_export', new_callable=MagicMock) as mock_export, \
+         patch.object(pipeline, 'stage_5_score', new_callable=MagicMock) as mock_score, \
+         patch.object(pipeline, 'stage_6_export', new_callable=MagicMock) as mock_export, \
          patch.object(pipeline, '_save_checkpoint', new_callable=MagicMock) as mock_save_cp, \
          patch.object(pipeline, 'clear_checkpoint', new_callable=MagicMock) as mock_clear_cp:
 
@@ -35,6 +36,7 @@ async def test_pipeline_runs_all_stages():
         mock_verify.return_value = [mock_brand]
         mock_ecom.return_value = [mock_brand]
         mock_enrich.return_value = [{"brand_name": "Test Store", "website": "https://teststore.com"}]
+        mock_score.return_value = [{"brand_name": "Test Store", "website": "https://teststore.com", "priority_score": 50}]
         mock_export.return_value = "output.csv"
 
         result = await pipeline.run(verticals=["apparel"], countries=["us"])
@@ -44,4 +46,43 @@ async def test_pipeline_runs_all_stages():
         mock_verify.assert_called_once()
         mock_ecom.assert_called_once()
         mock_enrich.assert_called_once()
+        mock_score.assert_called_once()
         mock_export.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_includes_scoring_stage():
+    """Test that pipeline adds tech stack scoring to enriched leads."""
+    pipeline = Pipeline()
+
+    # Mock enriched data with technology_names
+    mock_enriched = [
+        {
+            "brand_name": "Fleet Feet",
+            "location_count": 5,
+            "has_ecommerce": True,
+            "marketplaces": "Amazon",
+            "technology_names": ["Lightspeed", "Klaviyo"],
+            "contact_1_name": "John Smith",
+        },
+        {
+            "brand_name": "Local Sports",
+            "location_count": 4,
+            "has_ecommerce": True,
+            "marketplaces": "",
+            "technology_names": ["Square"],
+            "contact_1_name": "Jane Doe",
+        },
+    ]
+
+    scored = pipeline.stage_5_score(mock_enriched)
+
+    # Check scoring fields added
+    assert "priority_score" in scored[0]
+    assert "pos_platform" in scored[0]
+    assert "uses_lightspeed" in scored[0]
+
+    # Lightspeed lead should be first (highest score)
+    assert scored[0]["brand_name"] == "Fleet Feet"
+    assert scored[0]["uses_lightspeed"] is True
+    assert scored[0]["priority_score"] > scored[1]["priority_score"]
