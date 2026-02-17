@@ -16,6 +16,7 @@ from src.navigation import NavigationStack, BACK_OPTION, MAIN_MENU_OPTION
 
 from src.pipeline import Pipeline
 from src.config import settings
+from src.outreach_generator import OutreachGenerator, MESSAGE_TYPES
 
 app = typer.Typer(
     help="Lead Generator - Find omnichannel retail leads",
@@ -848,6 +849,24 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
 
         console.print(info_table)
 
+        # Store Locations section
+        if pd.notna(row.get("addresses")) and str(row.get("addresses")).strip():
+            console.print("\n[bold]Store Locations:[/bold]")
+            addresses_str = str(row.get("addresses", ""))
+            addresses = [addr.strip() for addr in addresses_str.split("|") if addr.strip()]
+
+            addr_table = Table(box=box.SIMPLE, show_header=False)
+            addr_table.add_column("", style="dim", width=3)
+            addr_table.add_column("Address")
+
+            for i, addr in enumerate(addresses[:10], 1):  # Limit to 10 addresses in display
+                addr_table.add_row(f"{i}.", addr)
+
+            if len(addresses) > 10:
+                addr_table.add_row("", f"[dim]... and {len(addresses) - 10} more locations[/dim]")
+
+            console.print(addr_table)
+
         # Contacts
         has_contacts = False
         for i in range(1, 5):
@@ -892,6 +911,16 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
         # Navigation options
         nav_choices = []
 
+        # Outreach generation option
+        brand_name = str(row.get("brand_name", "Unknown"))
+        outreach_gen = OutreachGenerator()
+        has_outreach = outreach_gen.has_cached_outreach(brand_name)
+
+        if has_outreach:
+            nav_choices.append({"name": "✉️  View outreach messages", "value": "outreach"})
+        else:
+            nav_choices.append({"name": "✉️  Generate outreach", "value": "outreach"})
+
         if current_idx > 0:
             nav_choices.append({"name": "⬅️  Previous lead", "value": "prev"})
 
@@ -909,6 +938,8 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
 
         if action == "back":
             return current_idx
+        elif action == "outreach":
+            _outreach_flow(row)
         elif action == "prev" and current_idx > 0:
             current_idx -= 1
         elif action == "next" and current_idx < total_leads - 1:
@@ -921,6 +952,172 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
                 default=current_idx + 1,
             ).execute()
             current_idx = int(jump_to) - 1
+
+
+def _outreach_flow(lead_row):
+    """Outreach generation and viewing flow for a single lead."""
+    import pandas as pd
+
+    brand_name = str(lead_row.get("brand_name", "Unknown"))
+    gen = OutreachGenerator()
+
+    # Check for cached messages
+    cached = gen.load_cached_outreach(brand_name)
+
+    if cached:
+        # Show existing messages
+        _display_outreach_messages(cached, brand_name)
+
+        action = inquirer.select(
+            message="What would you like to do?",
+            choices=[
+                {"name": "🔄 Regenerate all messages", "value": "regen_all"},
+                {"name": "✏️  Regenerate with instructions", "value": "regen_guided"},
+                {"name": "🎯 Regenerate specific message", "value": "regen_single"},
+                Separator(),
+                {"name": "← Back to lead", "value": "back"},
+            ],
+        ).execute()
+
+        if action == "back":
+            return
+
+        if action == "regen_all":
+            _do_generate(gen, lead_row, brand_name)
+
+        elif action == "regen_guided":
+            instructions = inquirer.text(
+                message="Enter instructions (e.g. 'make it shorter', 'more casual tone'):",
+            ).execute()
+            if instructions.strip():
+                _do_generate(gen, lead_row, brand_name, instructions=instructions)
+
+        elif action == "regen_single":
+            msg_type = inquirer.select(
+                message="Which message to regenerate?",
+                choices=[
+                    {"name": heading, "value": key}
+                    for key, heading in MESSAGE_TYPES.items()
+                ],
+            ).execute()
+
+            instructions = inquirer.text(
+                message="Instructions (optional, press Enter to skip):",
+                default="",
+            ).execute()
+
+            with console.status(f"[bold cyan]Regenerating {MESSAGE_TYPES[msg_type]}..."):
+                try:
+                    messages = gen.regenerate_single(
+                        lead_row,
+                        message_type=msg_type,
+                        instructions=instructions if instructions.strip() else None,
+                    )
+                    console.print(f"[green]✓ Regenerated {MESSAGE_TYPES[msg_type]}[/green]\n")
+                    _display_outreach_messages(messages, brand_name)
+                except Exception as e:
+                    console.print(f"[red]Error: {e}[/red]")
+    else:
+        # No cached messages — generate new ones
+        _do_generate(gen, lead_row, brand_name)
+
+
+def _do_generate(gen: OutreachGenerator, lead_row, brand_name: str, instructions: str = None):
+    """Run the generation flow: pick mode, template, contact, generate."""
+    import pandas as pd
+
+    # Pick mode
+    mode = inquirer.select(
+        message="Generation mode:",
+        choices=[
+            {"name": "📝 Template-guided (follows your template's style)", "value": "template"},
+            {"name": "✨ Free-form (original copy from lead data)", "value": "freeform"},
+        ],
+    ).execute()
+
+    template_name = None
+    if mode == "template":
+        templates = gen.list_templates()
+        if not templates:
+            console.print("[yellow]No templates found in templates/ directory. Using free-form mode.[/yellow]")
+        else:
+            template_choices = [
+                {"name": f"{t['name']} — {t['title']}", "value": t["name"]}
+                for t in templates
+            ]
+            template_name = inquirer.select(
+                message="Select template:",
+                choices=template_choices,
+            ).execute()
+
+    # Pick contact if multiple
+    contact_index = 1
+    contacts = []
+    for i in range(1, 5):
+        name = lead_row.get(f"contact_{i}_name")
+        if pd.notna(name) and str(name).strip():
+            title = lead_row.get(f"contact_{i}_title", "")
+            title_str = f" ({title})" if pd.notna(title) and str(title).strip() else ""
+            contacts.append({"name": f"{name}{title_str}", "value": i})
+
+    if len(contacts) > 1:
+        contact_index = inquirer.select(
+            message="Generate for which contact?",
+            choices=contacts,
+        ).execute()
+    elif len(contacts) == 0:
+        console.print("[yellow]No contacts found for this lead. Using placeholder.[/yellow]")
+
+    # Generate
+    with console.status("[bold cyan]Generating outreach messages..."):
+        try:
+            if instructions:
+                messages = gen.regenerate(
+                    lead_row,
+                    template_name=template_name,
+                    contact_index=contact_index,
+                    instructions=instructions,
+                )
+            else:
+                messages = gen.generate(
+                    lead_row,
+                    template_name=template_name,
+                    contact_index=contact_index,
+                )
+
+                # Save to cache
+                contact_name = str(lead_row.get(f"contact_{contact_index}_name", "Unknown"))
+                from src.config import settings
+                gen.save_outreach(
+                    brand_name,
+                    messages,
+                    template_name or "free-form",
+                    contact_name,
+                    settings.outreach.llm_model,
+                )
+
+            console.print("[green]✓ Messages generated and saved[/green]\n")
+            _display_outreach_messages(messages, brand_name)
+
+        except Exception as e:
+            console.print(f"[red]Error generating outreach: {e}[/red]")
+            console.print("[dim]Check your API key and LLM provider settings.[/dim]")
+
+
+def _display_outreach_messages(messages: dict[str, str], brand_name: str):
+    """Display outreach messages in Rich panels."""
+    console.print()
+    for msg_type, heading in MESSAGE_TYPES.items():
+        content = messages.get(msg_type)
+        if content:
+            console.print(Panel(
+                content,
+                title=f"[bold]{heading}[/bold]",
+                subtitle=brand_name,
+                border_style="cyan",
+                padding=(1, 2),
+            ))
+            console.print()
 
 
 def _interactive_stats():
