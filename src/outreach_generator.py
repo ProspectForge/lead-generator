@@ -131,3 +131,91 @@ class OutreachGenerator:
             lines.append(f"- Company LinkedIn: {company_linkedin}")
 
         return "\n".join(lines)
+
+    def _parse_response(self, response: str) -> dict[str, str]:
+        """Parse LLM response into individual messages by heading."""
+        messages = {}
+
+        # Map heading text to message type keys
+        heading_map = {
+            "cold email": "cold_email",
+            "linkedin connection request": "linkedin_request",
+            "linkedin follow-up": "linkedin_followup",
+            "linkedin follow up": "linkedin_followup",
+            "follow-up email": "follow_up_email",
+            "follow up email": "follow_up_email",
+        }
+
+        # Split by ## headings
+        sections = re.split(r"^## ", response, flags=re.MULTILINE)
+
+        for section in sections:
+            if not section.strip():
+                continue
+
+            # First line is the heading
+            lines = section.split("\n", 1)
+            heading = lines[0].strip().lower()
+            body = lines[1].strip() if len(lines) > 1 else ""
+
+            for pattern, key in heading_map.items():
+                if pattern in heading:
+                    messages[key] = body
+                    break
+
+        return messages
+
+    def _build_user_prompt(
+        self,
+        lead_row: pd.Series,
+        contact_index: int,
+        template_content: Optional[str] = None,
+    ) -> str:
+        """Build the user prompt for the LLM."""
+        lead_data = self._format_lead_data(lead_row, contact_index)
+
+        parts = []
+        if template_content:
+            parts.append("Here is the template to follow as a style guide:")
+            parts.append(template_content)
+            parts.append("")
+
+        parts.append("Here is the lead data:")
+        parts.append(lead_data)
+        parts.append("")
+        parts.append(
+            "Generate personalized versions of all 4 message types. "
+            "Output each under a markdown heading: "
+            "## Cold Email, ## LinkedIn Connection Request, "
+            "## LinkedIn Follow-Up, ## Follow-Up Email."
+        )
+
+        return "\n".join(parts)
+
+    def generate(
+        self,
+        lead_row: pd.Series,
+        template_name: Optional[str] = None,
+        contact_index: int = 1,
+    ) -> dict[str, str]:
+        """Generate all 4 outreach messages for a lead.
+
+        Args:
+            lead_row: A pandas Series with lead data.
+            template_name: Template name (without .md) for guided mode, or None for free-form.
+            contact_index: Which contact to personalize for (1-4).
+
+        Returns:
+            Dict mapping message type keys to generated text.
+        """
+        template_content = None
+        if template_name:
+            template_content = self._read_template(template_name)
+
+        system_prompt = SYSTEM_PROMPT_TEMPLATE if template_content else SYSTEM_PROMPT_FREEFORM
+        user_prompt = self._build_user_prompt(lead_row, contact_index, template_content)
+
+        client = LLMClient.from_settings()
+        response = client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        return self._parse_response(response)

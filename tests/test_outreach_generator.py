@@ -135,3 +135,112 @@ def test_read_template_not_found(tmp_path):
     gen = OutreachGenerator(templates_dir=tmp_path)
     with pytest.raises(FileNotFoundError):
         gen._read_template("nonexistent")
+
+
+def test_parse_generated_response():
+    """Parser extracts individual messages from LLM's combined response."""
+    gen = OutreachGenerator()
+    response = """## Cold Email
+
+**Subject:** Test subject
+
+Hey John, this is the cold email body.
+
+## LinkedIn Connection Request
+
+Hi John — this is the connection request.
+
+## LinkedIn Follow-Up
+
+Thanks for connecting, John. This is the follow-up.
+
+## Follow-Up Email
+
+**Subject:** Re: Test subject
+
+Hey John, just following up.
+"""
+    messages = gen._parse_response(response)
+
+    assert "cold_email" in messages
+    assert "linkedin_request" in messages
+    assert "linkedin_followup" in messages
+    assert "follow_up_email" in messages
+    assert "cold email body" in messages["cold_email"]
+    assert "connection request" in messages["linkedin_request"]
+
+
+@patch("src.outreach_generator.LLMClient")
+def test_generate_template_mode(mock_llm_class, sample_lead_row, sample_template):
+    """Template-guided generation sends template + lead data to LLM."""
+    mock_client = MagicMock()
+    mock_llm_class.from_settings.return_value = mock_client
+    mock_client.generate.return_value = """## Cold Email
+
+**Subject:** Test
+
+Generated cold email.
+
+## LinkedIn Connection Request
+
+Generated connection request.
+
+## LinkedIn Follow-Up
+
+Generated follow-up.
+
+## Follow-Up Email
+
+**Subject:** Re: Test
+
+Generated follow-up email.
+"""
+
+    gen = OutreachGenerator(templates_dir=sample_template.parent)
+    messages = gen.generate(sample_lead_row, template_name="test-template")
+
+    assert len(messages) == 4
+    assert "Generated cold email" in messages["cold_email"]
+
+    # Verify LLM was called with template content in the prompt
+    call_args = mock_client.generate.call_args
+    user_prompt = call_args.kwargs.get("user_prompt") or call_args[0][1]
+    assert "Test Campaign" in user_prompt
+
+
+@patch("src.outreach_generator.LLMClient")
+def test_generate_freeform_mode(mock_llm_class, sample_lead_row):
+    """Free-form generation sends only lead data with freeform system prompt."""
+    mock_client = MagicMock()
+    mock_llm_class.from_settings.return_value = mock_client
+    mock_client.generate.return_value = """## Cold Email
+
+**Subject:** Test
+
+Free-form cold email.
+
+## LinkedIn Connection Request
+
+Free-form request.
+
+## LinkedIn Follow-Up
+
+Free-form follow-up.
+
+## Follow-Up Email
+
+**Subject:** Re: Test
+
+Free-form follow-up email.
+"""
+
+    gen = OutreachGenerator()
+    messages = gen.generate(sample_lead_row, template_name=None)
+
+    assert len(messages) == 4
+    assert "Free-form cold email" in messages["cold_email"]
+
+    # Verify freeform system prompt was used
+    call_args = mock_client.generate.call_args
+    system = call_args.kwargs.get("system_prompt") or call_args[0][0]
+    assert "consulting company" in system.lower() or "outreach" in system.lower()
