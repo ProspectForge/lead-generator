@@ -12,6 +12,14 @@ class Contact:
     linkedin_url: str
 
 @dataclass
+class LinkedInCompanyData:
+    """Data extracted from a LinkedIn company page."""
+    location_count: Optional[int]
+    employee_range: Optional[str]
+    industry: Optional[str]
+    people: list[Contact]
+
+@dataclass
 class CompanyEnrichment:
     company_name: str
     linkedin_company_url: Optional[str]
@@ -109,6 +117,78 @@ class LinkedInEnricher:
             pass
 
         return contacts
+
+    def _parse_company_page(self, markdown: str) -> LinkedInCompanyData:
+        """Parse LinkedIn company page markdown to extract structured data."""
+        location_count = None
+        employee_range = None
+        industry = None
+        people = []
+
+        # Extract location count - patterns like "36 locations" or "36 associated members"
+        loc_match = re.search(r'(\d+)\s+locations?\b', markdown, re.IGNORECASE)
+        if loc_match:
+            location_count = int(loc_match.group(1))
+
+        # Extract employee range - patterns like "201-500 employees" or "Company size: 201-500"
+        emp_match = re.search(r'(\d+[\-–]\d+)\s*employees', markdown, re.IGNORECASE)
+        if not emp_match:
+            emp_match = re.search(r'[Cc]ompany\s+size[:\s]*(\d+[\-–]\d+)', markdown)
+        if emp_match:
+            employee_range = emp_match.group(1).replace('–', '-')
+
+        # Extract industry
+        ind_match = re.search(r'\*\*Industry:?\*\*\s*(.+)', markdown)
+        if not ind_match:
+            ind_match = re.search(r'Industry[:\s]+([A-Z][^\n]+)', markdown)
+        if ind_match:
+            industry = ind_match.group(1).strip()
+
+        # Extract people - look for LinkedIn profile links with names and titles
+        # Pattern: [**Name**](linkedin_url)\n Title
+        people_pattern = re.findall(
+            r'\[\*\*(.+?)\*\*\]\(https?://(?:www\.)?linkedin\.com/in/([\w-]+)\)\s*\n\s*(.+)',
+            markdown
+        )
+        for name, profile_id, title in people_pattern:
+            people.append(Contact(
+                name=name.strip(),
+                title=title.strip(),
+                linkedin_url=f"https://www.linkedin.com/in/{profile_id}"
+            ))
+
+        # Fallback: look for simpler patterns like "Name\nTitle" near linkedin URLs
+        if not people:
+            simple_pattern = re.findall(
+                r'([\w\s]+?)\s*[-–—|]\s*(?:https?://)?linkedin\.com/in/([\w-]+)',
+                markdown
+            )
+            for name, profile_id in simple_pattern:
+                name = name.strip()
+                if len(name) > 2 and len(name) < 60:
+                    people.append(Contact(
+                        name=name,
+                        title="(see LinkedIn profile)",
+                        linkedin_url=f"https://www.linkedin.com/in/{profile_id}"
+                    ))
+
+        return LinkedInCompanyData(
+            location_count=location_count,
+            employee_range=employee_range,
+            industry=industry,
+            people=people,
+        )
+
+    async def scrape_company_page(self, linkedin_url: str) -> LinkedInCompanyData:
+        """Scrape a LinkedIn company page and extract structured data."""
+        try:
+            data = await self._fetch_page(linkedin_url)
+            markdown = data.get("data", {}).get("markdown", "")
+            if not markdown:
+                return LinkedInCompanyData(location_count=None, employee_range=None, industry=None, people=[])
+            return self._parse_company_page(markdown)
+        except Exception:
+            return LinkedInCompanyData(location_count=None, employee_range=None, industry=None, people=[])
 
     async def find_company(self, company_name: str, website: str) -> Optional[str]:
         return await self._search_linkedin(company_name, website)
