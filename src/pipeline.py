@@ -36,6 +36,7 @@ class Checkpoint:
     places: list[dict] = field(default_factory=list)
     brands: list[dict] = field(default_factory=list)  # Serialized BrandGroup
     verified_brands: list[dict] = field(default_factory=list)
+    healthy_brands: list[dict] = field(default_factory=list)
     ecommerce_brands: list[dict] = field(default_factory=list)
     enriched: list[dict] = field(default_factory=list)
     timestamp: str = ""
@@ -77,8 +78,10 @@ class Pipeline:
             1: "Search",
             2: "Grouping",
             2.5: "Verification",
+            2.6: "Health Check",
             3: "E-commerce",
             4: "Enrichment",
+            4.5: "Quality Gate",
             5: "Scoring",
             6: "Export",
         }
@@ -1049,6 +1052,7 @@ class Pipeline:
         searched_cities = checkpoint.searched_cities if checkpoint else []
         brands = [self._deserialize_brand(b) for b in checkpoint.brands] if checkpoint and start_stage >= 2 else []
         verified_brands = [self._deserialize_brand(b) for b in checkpoint.verified_brands] if checkpoint and start_stage >= 2.5 else []
+        healthy_brands = [self._deserialize_brand(b) for b in checkpoint.healthy_brands] if checkpoint and start_stage >= 2.6 else []
         ecommerce_brands = [self._deserialize_brand(b) for b in checkpoint.ecommerce_brands] if checkpoint and start_stage >= 3 else []
         enriched = checkpoint.enriched if checkpoint and start_stage >= 4 else []
 
@@ -1090,9 +1094,19 @@ class Pipeline:
         else:
             console.print(f"  [dim]⏭ Skipping Stage 2b (Verification) - loaded {len(verified_brands)} verified brands from checkpoint[/dim]")
 
+        # Stage 2c: Website health check
+        if start_stage < 2.6:
+            healthy_brands = await self.stage_2c_website_health(verified_brands)
+            checkpoint.healthy_brands = [self._serialize_brand(b) for b in healthy_brands]
+            checkpoint.stage = 2.6
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 2c complete)[/dim]")
+        else:
+            console.print(f"  [dim]⏭ Skipping Stage 2c (Health Check) - loaded {len(healthy_brands)} healthy brands from checkpoint[/dim]")
+
         # Stage 3: E-commerce check
         if start_stage < 3:
-            ecommerce_brands = await self.stage_3_ecommerce(verified_brands)
+            ecommerce_brands = await self.stage_3_ecommerce(healthy_brands)
             checkpoint.ecommerce_brands = [self._serialize_brand(b) for b in ecommerce_brands]
             checkpoint.stage = 3
             self._save_checkpoint(checkpoint)
@@ -1109,6 +1123,14 @@ class Pipeline:
             console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
         else:
             console.print(f"  [dim]⏭ Skipping Stage 4 (LinkedIn) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
+
+        # Stage 4b: Quality gate
+        if start_stage < 4.5:
+            enriched = await self.stage_4b_quality_gate(enriched)
+            checkpoint.enriched = enriched
+            checkpoint.stage = 4.5
+            self._save_checkpoint(checkpoint)
+            console.print(f"  [dim]💾 Checkpoint saved (Stage 4b complete)[/dim]")
 
         # Stage 5: Score leads
         scored = self.stage_5_score(enriched)

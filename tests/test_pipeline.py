@@ -8,7 +8,6 @@ from src.brand_grouper import BrandGroup
 async def test_pipeline_runs_all_stages():
     pipeline = Pipeline()
 
-    # Create real BrandGroup objects instead of MagicMock for JSON serialization
     mock_brand = BrandGroup(
         normalized_name="test store",
         original_names=["Test Store"],
@@ -18,15 +17,16 @@ async def test_pipeline_runs_all_stages():
         cities=["New York"],
     )
 
-    # Mock Discovery class to avoid real API calls in stage 1
     mock_discovery_instance = MagicMock()
     mock_discovery_instance.run = AsyncMock(return_value=[{"name": "Test Store", "address": "123 Main St"}])
 
     with patch('src.pipeline.Discovery', return_value=mock_discovery_instance) as mock_discovery_cls, \
          patch.object(pipeline, 'stage_2_group', new_callable=MagicMock) as mock_group, \
          patch.object(pipeline, 'stage_2b_verify_chain_size', new_callable=MagicMock) as mock_verify, \
+         patch.object(pipeline, 'stage_2c_website_health', new_callable=AsyncMock) as mock_health, \
          patch.object(pipeline, 'stage_3_ecommerce', new_callable=AsyncMock) as mock_ecom, \
          patch.object(pipeline, 'stage_4_enrich', new_callable=AsyncMock) as mock_enrich, \
+         patch.object(pipeline, 'stage_4b_quality_gate', new_callable=AsyncMock) as mock_quality, \
          patch.object(pipeline, 'stage_5_score', new_callable=MagicMock) as mock_score, \
          patch.object(pipeline, 'stage_6_export', new_callable=MagicMock) as mock_export, \
          patch.object(pipeline, '_save_checkpoint', new_callable=MagicMock) as mock_save_cp, \
@@ -34,8 +34,10 @@ async def test_pipeline_runs_all_stages():
 
         mock_group.return_value = [mock_brand]
         mock_verify.return_value = [mock_brand]
+        mock_health.return_value = [mock_brand]
         mock_ecom.return_value = [mock_brand]
         mock_enrich.return_value = [{"brand_name": "Test Store", "website": "https://teststore.com"}]
+        mock_quality.return_value = [{"brand_name": "Test Store", "website": "https://teststore.com"}]
         mock_score.return_value = [{"brand_name": "Test Store", "website": "https://teststore.com", "priority_score": 50}]
         mock_export.return_value = "output.csv"
 
@@ -44,8 +46,10 @@ async def test_pipeline_runs_all_stages():
         mock_discovery_instance.run.assert_called_once()
         mock_group.assert_called_once()
         mock_verify.assert_called_once()
+        mock_health.assert_called_once()
         mock_ecom.assert_called_once()
         mock_enrich.assert_called_once()
+        mock_quality.assert_called_once()
         mock_score.assert_called_once()
         mock_export.assert_called_once()
 
