@@ -198,6 +198,10 @@ def _show_settings_overview():
         table.add_row("10", "Search Concurrency", str(settings.search_concurrency))
         table.add_row("11", "E-commerce Concurrency", str(settings.ecommerce_concurrency))
 
+        # Outreach
+        table.add_row("12", "Outreach LLM Provider", settings.outreach.llm_provider.capitalize())
+        table.add_row("13", "Outreach LLM Model", settings.outreach.llm_model)
+
         console.print(table)
 
         action = inquirer.select(
@@ -207,6 +211,7 @@ def _show_settings_overview():
                 {"name": "📧 Email verification settings", "value": "email"},
                 {"name": "⚡ Concurrency settings", "value": "concurrency"},
                 {"name": "🔑 View API key setup instructions", "value": "api_help"},
+                {"name": "✉️  Outreach LLM settings", "value": "outreach"},
                 Separator(),
                 {"name": BACK_OPTION, "value": "back"},
                 {"name": MAIN_MENU_OPTION, "value": "main_menu"},
@@ -232,6 +237,9 @@ def _show_settings_overview():
 
         elif action == "api_help":
             _show_api_help()
+
+        elif action == "outreach":
+            _configure_outreach()
 
 
 def _configure_enrichment():
@@ -320,6 +328,47 @@ def _configure_concurrency():
     console.print("[green]✓ Concurrency settings updated[/green]")
 
 
+def _configure_outreach():
+    """Configure outreach LLM settings."""
+    console.print()
+
+    provider = inquirer.select(
+        message="Select LLM provider for outreach generation:",
+        choices=[
+            {"name": "OpenAI (GPT-4o, GPT-4o-mini)", "value": "openai"},
+            {"name": "Anthropic (Claude Sonnet, Claude Haiku)", "value": "anthropic"},
+        ],
+        default=settings.outreach.llm_provider,
+    ).execute()
+    settings.outreach.llm_provider = provider
+
+    if provider == "openai":
+        model_choices = [
+            {"name": "gpt-4o (recommended)", "value": "gpt-4o"},
+            {"name": "gpt-4o-mini (faster, cheaper)", "value": "gpt-4o-mini"},
+        ]
+    else:
+        model_choices = [
+            {"name": "claude-sonnet-4-5-20250929 (recommended)", "value": "claude-sonnet-4-5-20250929"},
+            {"name": "claude-haiku-4-5-20251001 (faster, cheaper)", "value": "claude-haiku-4-5-20251001"},
+        ]
+
+    model = inquirer.select(
+        message="Select model:",
+        choices=model_choices,
+        default=settings.outreach.llm_model,
+    ).execute()
+    settings.outreach.llm_model = model
+
+    # Verify API key
+    if provider == "openai" and not settings.openai_api_key:
+        console.print("[yellow]Warning: OPENAI_API_KEY not set in .env[/yellow]")
+    elif provider == "anthropic" and not settings.anthropic_api_key:
+        console.print("[yellow]Warning: ANTHROPIC_API_KEY not set in .env[/yellow]")
+
+    console.print(f"[green]✓ Outreach settings updated: {provider} / {model}[/green]")
+
+
 def _show_api_help():
     """Show API key setup instructions."""
     console.print()
@@ -331,11 +380,13 @@ def _show_api_help():
         "FIRECRAWL_API_KEY=your_key\n\n"
         "[dim]# Optional[/dim]\n"
         "OPENAI_API_KEY=your_key      [dim]# For LLM disambiguation[/dim]\n"
+        "ANTHROPIC_API_KEY=your_key   [dim]# For outreach generation with Claude[/dim]\n"
         "APOLLO_API_KEY=your_key      [dim]# For paid enrichment[/dim]\n\n"
         "[bold]Get API keys:[/bold]\n"
         "• Google Places: [link]https://console.cloud.google.com/[/link]\n"
         "• Firecrawl: [link]https://firecrawl.dev/[/link]\n"
         "• OpenAI: [link]https://platform.openai.com/[/link]\n"
+        "• Anthropic: [link]https://console.anthropic.com/[/link]\n"
         "• Apollo: [link]https://app.apollo.io/[/link]",
         title="Setup Instructions",
         border_style="blue",
