@@ -468,7 +468,6 @@ class Pipeline:
 
         concurrency = settings.ecommerce_concurrency
         checker = EcommerceChecker(
-            api_key=settings.firecrawl_api_key,
             pages_to_check=settings.ecommerce_pages_to_check
         )
         semaphore = asyncio.Semaphore(concurrency)
@@ -484,11 +483,16 @@ class Pipeline:
             console.print(f"  [dim]• Skipping {skipped} brands without websites[/dim]")
         console.print()
 
+        crawl_failure_count = 0
+
         async def check_brand(brand: BrandGroup, progress, task) -> tuple[BrandGroup, bool]:
             """Check a single brand with semaphore for rate limiting."""
+            nonlocal crawl_failure_count
             async with semaphore:
                 try:
                     result = await checker.check(brand.website)
+                    if result.crawl_failed:
+                        crawl_failure_count += 1
                     # Attach marketplace and platform data to brand
                     brand.marketplaces = result.marketplaces
                     brand.marketplace_links = result.marketplace_links
@@ -497,6 +501,7 @@ class Pipeline:
                     progress.advance(task)
                     return (brand, result.has_ecommerce)
                 except Exception as e:
+                    crawl_failure_count += 1
                     console.print(f"  [red]✗ Error: {brand.normalized_name.title()}: {e}[/red]")
                     progress.advance(task)
                     return (brand, False)
@@ -517,7 +522,7 @@ class Pipeline:
 
         # Collect results
         ecommerce_brands = [brand for brand, has_ecom in check_results if has_ecom]
-        no_ecommerce_count = len(brands_with_website) - len(ecommerce_brands)
+        no_ecommerce_count = len(brands_with_website) - len(ecommerce_brands) - crawl_failure_count
 
         # Summary
         console.print()
@@ -526,8 +531,18 @@ class Pipeline:
         table.add_column("Count", style="green", justify="right")
         table.add_row("With e-commerce", f"[bold green]{len(ecommerce_brands)}[/bold green]")
         table.add_row("Without e-commerce", str(no_ecommerce_count))
+        table.add_row("Crawl failed (Firecrawl)", str(crawl_failure_count))
         table.add_row("Skipped (no website)", str(skipped))
         console.print(table)
+
+        # Warn if most crawls failed — likely an API issue
+        if crawl_failure_count > 0 and len(brands_with_website) > 0:
+            failure_rate = crawl_failure_count / len(brands_with_website)
+            if failure_rate > 0.5:
+                console.print()
+                console.print(f"  [bold red]⚠ WARNING: {crawl_failure_count}/{len(brands_with_website)} ({failure_rate:.0%}) crawls failed![/bold red]")
+                console.print(f"  [red]  This likely indicates a Firecrawl API issue (exhausted credits, invalid key, or rate limits).[/red]")
+                console.print(f"  [red]  Check your FIRECRAWL_API_KEY and credits at https://firecrawl.dev[/red]")
 
         return ecommerce_brands
 

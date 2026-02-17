@@ -19,25 +19,47 @@ def mock_company_response():
 
 
 @pytest.fixture
-def mock_people_response():
+def mock_search_response():
+    """Step 1 response from mixed_people/api_search (obfuscated, has IDs)."""
     return {
         "people": [
             {
+                "id": "abc123",
+                "first_name": "John",
+                "title": "CEO",
+            },
+            {
+                "id": "def456",
+                "first_name": "Jane",
+                "title": "COO",
+            },
+        ]
+    }
+
+
+@pytest.fixture
+def mock_reveal_responses():
+    """Step 2 responses from people/match (revealed full details)."""
+    return [
+        {
+            "person": {
                 "name": "John Smith",
                 "email": "john@fleetfeet.com",
                 "phone_numbers": [{"sanitized_number": "+1234567890"}],
                 "title": "CEO",
                 "linkedin_url": "https://linkedin.com/in/johnsmith",
-            },
-            {
+            }
+        },
+        {
+            "person": {
                 "name": "Jane Doe",
                 "email": "jane@fleetfeet.com",
                 "phone_numbers": [],
                 "title": "COO",
                 "linkedin_url": "https://linkedin.com/in/janedoe",
-            },
-        ]
-    }
+            }
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -56,11 +78,12 @@ async def test_search_company_returns_company_data(mock_company_response):
 
 
 @pytest.mark.asyncio
-async def test_search_contacts_returns_contacts(mock_people_response):
+async def test_search_contacts_returns_contacts(mock_search_response, mock_reveal_responses):
     enricher = ApolloEnricher(api_key="test_key")
 
     with patch.object(enricher, '_make_request', new_callable=AsyncMock) as mock_request:
-        mock_request.return_value = mock_people_response
+        # First call: search (returns IDs), then two reveal calls
+        mock_request.side_effect = [mock_search_response] + mock_reveal_responses
 
         contacts = await enricher.search_contacts("Fleet Feet", "https://fleetfeet.com")
 
@@ -71,12 +94,12 @@ async def test_search_contacts_returns_contacts(mock_people_response):
 
 
 @pytest.mark.asyncio
-async def test_enrich_returns_full_enrichment(mock_company_response, mock_people_response):
+async def test_enrich_returns_full_enrichment(mock_company_response, mock_search_response, mock_reveal_responses):
     enricher = ApolloEnricher(api_key="test_key")
 
     with patch.object(enricher, '_make_request', new_callable=AsyncMock) as mock_request:
-        # First call for company, second for contacts
-        mock_request.side_effect = [mock_company_response, mock_people_response]
+        # First call: company, second: search, then two reveals
+        mock_request.side_effect = [mock_company_response, mock_search_response] + mock_reveal_responses
 
         result = await enricher.enrich("Fleet Feet", "https://fleetfeet.com")
 

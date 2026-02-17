@@ -8,30 +8,22 @@ from src.ecommerce_check import EcommerceChecker
 @pytest.mark.asyncio
 async def test_full_marketplace_detection_flow():
     """Test complete marketplace detection from website content."""
-    checker = EcommerceChecker(api_key="test_key")
+    checker = EcommerceChecker()
 
     # Simulate a website with Shopify e-commerce AND Amazon/eBay presence
     mock_content = """
-    # Welcome to Acme Supplements
-
-    ## Shop Our Products
-
-    [Add to Cart](/cart)
-    [Checkout](/checkout)
-
-    Price: $29.99
-
-    ## Also Available On
-
-    - [Shop on Amazon](https://amazon.com/stores/AcmeSupplements)
-    - [Our eBay Store](https://ebay.com/str/acmesupplements)
-
-    Free shipping via Shopify!
-    cdn.shopify.com/assets/store.js
+    <html><body>
+    <a href="/cart">Add to Cart</a>
+    <a href="/checkout">Checkout</a>
+    <span>$29.99</span>
+    <a href="https://amazon.com/stores/AcmeSupplements">Shop on Amazon</a>
+    <a href="https://ebay.com/str/acmesupplements">Our eBay Store</a>
+    <script src="https://cdn.shopify.com/assets/store.js"></script>
+    </body></html>
     """
 
-    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
-        mock_crawl.return_value = [mock_content]
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = [mock_content]
 
         result = await checker.check("https://acmesupplements.com")
 
@@ -55,22 +47,19 @@ async def test_full_marketplace_detection_flow():
 @pytest.mark.asyncio
 async def test_ecommerce_without_marketplace():
     """Test e-commerce site without marketplace presence."""
-    checker = EcommerceChecker(api_key="test_key")
+    checker = EcommerceChecker()
 
     mock_content = """
-    # Local Fitness Store
-
-    [Add to Cart](/cart)
-    [Checkout](/checkout)
-
-    Price: $49.99
-
-    Powered by Shopify
-    cdn.shopify.com/assets/store.js
+    <html><body>
+    <a href="/cart">Add to Cart</a>
+    <a href="/checkout">Checkout</a>
+    <span>$49.99</span>
+    <script src="https://cdn.shopify.com/assets/store.js"></script>
+    </body></html>
     """
 
-    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
-        mock_crawl.return_value = [mock_content]
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = [mock_content]
 
         result = await checker.check("https://localfitness.com")
 
@@ -82,20 +71,19 @@ async def test_ecommerce_without_marketplace():
 @pytest.mark.asyncio
 async def test_detects_walmart_and_etsy():
     """Test detection of Walmart and Etsy marketplaces."""
-    checker = EcommerceChecker(api_key="test_key")
+    checker = EcommerceChecker()
 
     mock_content = """
-    # Handmade Crafts
-
-    [Buy Now](/shop)
-    $19.99
-
-    Available on Walmart marketplace!
-    Visit our Etsy shop: https://etsy.com/shop/HandmadeCrafts
+    <html><body>
+    <a href="/shop">Buy Now</a>
+    <span>$19.99</span>
+    <p>Available on Walmart marketplace!</p>
+    <a href="https://etsy.com/shop/HandmadeCrafts">Visit our Etsy shop</a>
+    </body></html>
     """
 
-    with patch.object(checker, '_crawl_site', new_callable=AsyncMock) as mock_crawl:
-        mock_crawl.return_value = [mock_content]
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = [mock_content]
 
         result = await checker.check("https://handmadecrafts.com")
 

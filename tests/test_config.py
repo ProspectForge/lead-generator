@@ -16,9 +16,9 @@ def test_settings_loads_cities_config():
 
     assert "us" in settings.cities
     assert "canada" in settings.cities
-    # At least 35 US cities and 15 Canada cities (more may be added)
-    assert len(settings.cities["us"]) >= 35
-    assert len(settings.cities["canada"]) >= 15
+    # Expanded city lists: ~780 US cities and ~125 Canada cities (pop >= 50k)
+    assert len(settings.cities["us"]) >= 700
+    assert len(settings.cities["canada"]) >= 100
 
 def test_settings_loads_search_queries():
     settings = Settings()
