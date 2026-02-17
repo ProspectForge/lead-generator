@@ -12,6 +12,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
+import httpx
+
 from src.config import settings
 from src.places_search import PlacesSearcher, PlaceResult
 from src.brand_grouper import BrandGrouper, BrandGroup
@@ -48,6 +50,13 @@ class Checkpoint:
 
 class Pipeline:
     CHECKPOINT_DIR = "checkpoints"
+
+    # Known domain parking / parked domain hosts
+    PARKING_DOMAINS = {
+        "godaddy.com", "sedoparking.com", "hugedomains.com",
+        "afternic.com", "dan.com", "parkingcrew.net",
+        "bodis.com", "above.com", "undeveloped.com",
+    }
 
     def __init__(self):
         self.data_dir = Path(__file__).parent.parent / "data"
@@ -270,7 +279,7 @@ class Pipeline:
         self._show_stage_header(2, "Brand Grouping", "Normalizing names and grouping by brand")
 
         with console.status("[cyan]Analyzing brands...[/cyan]"):
-            grouper = BrandGrouper(min_locations=3, max_locations=10, resolve_redirects=True)
+            grouper = BrandGrouper(min_locations=2, max_locations=10, resolve_redirects=True)
             groups = grouper.group(places)
 
             # Apply blocklist filter
@@ -355,6 +364,96 @@ class Pipeline:
         console.print(table)
 
         return verified_brands
+
+    async def stage_2c_website_health(self, brands: list[BrandGroup]) -> list[BrandGroup]:
+        """Filter out brands with dead or parked websites."""
+        self._show_stage_header("2c", "Website Health Check", "Filtering dead and parked websites")
+
+        if not brands:
+            console.print("  [yellow]⚠ No brands to check[/yellow]")
+            return []
+
+        brands_with_site = [b for b in brands if b.website]
+        brands_without_site = [b for b in brands if not b.website]
+        concurrency = settings.health_check_concurrency
+        semaphore = asyncio.Semaphore(concurrency)
+
+        console.print(f"  [dim]• Checking {len(brands_with_site)} websites ({concurrency} parallel)[/dim]")
+        if brands_without_site:
+            console.print(f"  [dim]• Passing through {len(brands_without_site)} brands without websites[/dim]")
+        console.print()
+
+        async def check_health(brand: BrandGroup) -> tuple[BrandGroup, bool, str]:
+            """Check if a brand's website is alive. Returns (brand, is_healthy, reason)."""
+            async with semaphore:
+                url = brand.website
+                if not url.startswith(("http://", "https://")):
+                    url = f"https://{url}"
+
+                try:
+                    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                        response = await client.head(url)
+
+                        # Check for dead status codes
+                        if response.status_code in (404, 410, 500, 502, 503):
+                            return (brand, False, f"HTTP {response.status_code}")
+
+                        # Check for parked domain redirect
+                        final_host = response.url.host or ""
+                        for parking_domain in Pipeline.PARKING_DOMAINS:
+                            if parking_domain in final_host:
+                                return (brand, False, f"Parked domain ({parking_domain})")
+
+                        return (brand, True, "OK")
+
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    return (brand, False, "Connection failed")
+                except httpx.TimeoutException:
+                    return (brand, False, "Timeout")
+                except Exception:
+                    # On unexpected errors, let the brand through
+                    return (brand, True, "Check failed (passing through)")
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Checking {len(brands_with_site)} websites...", total=len(brands_with_site))
+
+            async def check_and_advance(brand):
+                result = await check_health(brand)
+                progress.advance(task)
+                return result
+
+            results = await asyncio.gather(*[check_and_advance(b) for b in brands_with_site])
+
+        healthy = []
+        dead_count = 0
+        for brand, is_healthy, reason in results:
+            if is_healthy:
+                healthy.append(brand)
+            else:
+                dead_count += 1
+                console.print(f"  [red]✗ Dead:[/red] {brand.normalized_name.title()} — {reason}")
+
+        # Add back brands without websites
+        healthy.extend(brands_without_site)
+
+        # Summary
+        console.print()
+        table = Table(box=box.SIMPLE)
+        table.add_column("Status", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Healthy websites", f"[bold green]{len(healthy) - len(brands_without_site)}[/bold green]")
+        table.add_row("Dead/parked websites", f"[bold red]{dead_count}[/bold red]")
+        table.add_row("No website (pass-through)", str(len(brands_without_site)))
+        console.print(table)
+
+        return healthy
 
     async def stage_3_ecommerce(self, brands: list[BrandGroup]) -> list[BrandGroup]:
         """Check each brand for e-commerce presence (parallel)."""
@@ -503,6 +602,13 @@ class Pipeline:
                         if result.company.linkedin_url:
                             stats["companies_found"] += 1
 
+                        # Extract unique addresses from locations
+                        addresses = []
+                        for loc in brand.locations:
+                            addr = loc.get("address", "")
+                            if addr and addr not in addresses:
+                                addresses.append(addr)
+
                         row = {
                             "brand_name": brand_name,
                             "location_count": brand.location_count,
@@ -512,6 +618,7 @@ class Pipeline:
                             "marketplaces": ", ".join(brand.marketplaces),
                             "priority": brand.priority,
                             "cities": ", ".join(brand.cities[:5]),
+                            "addresses": " | ".join(addresses),
                             "linkedin_company": result.company.linkedin_url or "",
                             "employee_count": result.company.employee_count or "",
                             "industry": result.company.industry or "",
@@ -628,6 +735,13 @@ class Pipeline:
                         else:
                             stats["other"] += 1
 
+                    # Extract unique addresses from locations
+                    addresses = []
+                    for loc in brand.locations:
+                        addr = loc.get("address", "")
+                        if addr and addr not in addresses:
+                            addresses.append(addr)
+
                     enriched.append({
                         "brand_name": brand_name,
                         "location_count": brand.location_count,
@@ -637,6 +751,7 @@ class Pipeline:
                         "marketplaces": ", ".join(brand.marketplaces),
                         "priority": brand.priority,
                         "cities": ", ".join(brand.cities[:5]),
+                        "addresses": " | ".join(addresses),
                         "linkedin_company": result.linkedin_company_url or "",
                         "employee_count": "",
                         "industry": "",
