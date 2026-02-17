@@ -58,6 +58,9 @@ class Settings:
     enrichment: EnrichmentSettings = field(default_factory=EnrichmentSettings)
     email_verification: EmailVerificationSettings = field(default_factory=EmailVerificationSettings)
     outreach: OutreachSettings = field(default_factory=OutreachSettings)
+    quality_gate_max_locations: int = 10
+    quality_gate_max_employees: int = 500
+    health_check_concurrency: int = 10
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
@@ -112,6 +115,15 @@ class Settings:
             llm_model=outreach_config.get("llm_model", "gpt-4o"),
             default_template=outreach_config.get("default_template", ""),
         )
+
+        # Load quality gate settings
+        quality_gate_config = config.get("quality_gate", {})
+        self.quality_gate_max_locations = quality_gate_config.get("max_locations", 10)
+        self.quality_gate_max_employees = quality_gate_config.get("max_employees", 500)
+
+        # Load health check settings
+        health_check_config = config.get("health_check", {})
+        self.health_check_concurrency = health_check_config.get("concurrency", 10)
 
     def get_all_city_names(self) -> list[str]:
         """Returns all city names (just the city part, without state/province)."""

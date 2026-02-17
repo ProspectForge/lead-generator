@@ -78,17 +78,50 @@
     "Surrey, BC",
     "Richmond, BC",
     "North Vancouver, BC",
+    "West Vancouver, BC",
+    "New Westminster, BC",
+    "Langley, BC",
+    "Maple Ridge, BC",
+    "Delta, BC",
+    "White Rock, BC",
+    "Abbotsford, BC",
+    "Chilliwack, BC",
+    "Nanaimo, BC",
+    "Kelowna, BC",
+    "Kamloops, BC",
     "Mississauga, ON",
     "Markham, ON",
     "Vaughan, ON",
     "Oakville, ON",
     "Burlington, ON",
+    "Brampton, ON",
+    "Richmond Hill, ON",
+    "Ajax, ON",
+    "Pickering, ON",
+    "Whitby, ON",
+    "Milton, ON",
+    "Newmarket, ON",
+    "Aurora, ON",
+    "Waterloo, ON",
+    "Cambridge, ON",
+    "Guelph, ON",
+    "Barrie, ON",
     "Laval, QC",
     "Longueuil, QC",
     "Brossard, QC",
+    "Terrebonne, QC",
+    "Repentigny, QC",
+    "Saint-Jean-sur-Richelieu, QC",
+    "Sherbrooke, QC",
+    "Trois-Rivieres, QC",
     "Saskatoon, SK",
     "Regina, SK",
-    "Red Deer, AB"
+    "Red Deer, AB",
+    "Lethbridge, AB",
+    "St. Albert, AB",
+    "Spruce Grove, AB",
+    "Airdrie, AB",
+    "Okotoks, AB"
   ],
   "search_queries": {
     "health_wellness": [
@@ -99,7 +132,19 @@
       "natural health store",
       "organic grocery",
       "wellness store",
-      "herbal supplement shop"
+      "herbal supplement shop",
+      "sports nutrition store",
+      "bodybuilding supplements",
+      "protein supplements store",
+      "fitness supplements",
+      "muscle supplements",
+      "workout supplements store",
+      "fuel supplements",
+      "pre workout supplements",
+      "sports supplements",
+      "gym supplements",
+      "athletic supplements",
+      "performance nutrition"
     ],
     "sporting_goods": [
       "sporting goods store",
@@ -332,5 +377,12 @@
     "enabled": false,
     "verify_smtp": false,
     "include_risky": false
+  },
+  "quality_gate": {
+    "max_locations": 10,
+    "max_employees": 500
+  },
+  "health_check": {
+    "concurrency": 10
   }
 }
