@@ -219,3 +219,68 @@ class OutreachGenerator:
         response = client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
 
         return self._parse_response(response)
+
+    def save_outreach(
+        self,
+        brand_name: str,
+        messages: dict[str, str],
+        template_name: str,
+        contact_name: str,
+        model: str,
+        instructions: Optional[str] = None,
+    ) -> None:
+        """Save generated messages to individual files with metadata."""
+        self.outreach_dir.mkdir(parents=True, exist_ok=True)
+        slug = _slugify(brand_name)
+        now = datetime.now().isoformat(timespec="seconds")
+
+        for msg_type, content in messages.items():
+            header = (
+                f"---\n"
+                f"brand: {brand_name}\n"
+                f"template: {template_name}\n"
+                f"contact: {contact_name}\n"
+                f"generated_at: {now}\n"
+                f"model: {model}\n"
+                f"instructions: {instructions or 'null'}\n"
+                f"---\n\n"
+            )
+            file_path = self.outreach_dir / f"{slug}_{msg_type}.md"
+            file_path.write_text(header + content)
+
+    def load_cached_outreach(self, brand_name: str) -> Optional[dict[str, str]]:
+        """Load previously generated outreach messages for a brand.
+
+        Returns None if no cached messages exist.
+        """
+        slug = _slugify(brand_name)
+        messages = {}
+
+        for msg_type in MESSAGE_TYPES:
+            file_path = self.outreach_dir / f"{slug}_{msg_type}.md"
+            if not file_path.exists():
+                continue
+
+            raw = file_path.read_text()
+
+            # Strip metadata header
+            if raw.startswith("---"):
+                parts = raw.split("---", 2)
+                if len(parts) >= 3:
+                    content = parts[2].strip()
+                else:
+                    content = raw
+            else:
+                content = raw
+
+            messages[msg_type] = content
+
+        return messages if messages else None
+
+    def has_cached_outreach(self, brand_name: str) -> bool:
+        """Check if cached outreach exists for a brand."""
+        slug = _slugify(brand_name)
+        return any(
+            (self.outreach_dir / f"{slug}_{msg_type}.md").exists()
+            for msg_type in MESSAGE_TYPES
+        )

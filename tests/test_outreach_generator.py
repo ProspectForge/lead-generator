@@ -244,3 +244,81 @@ Free-form follow-up email.
     call_args = mock_client.generate.call_args
     system = call_args.kwargs.get("system_prompt") or call_args[0][0]
     assert "consulting company" in system.lower() or "outreach" in system.lower()
+
+
+def test_slugify():
+    from src.outreach_generator import _slugify
+    assert _slugify("Portland Running Company") == "portland-running-company"
+    assert _slugify("Nike's Store #5") == "nike-s-store-5"
+    assert _slugify("  Spaces  ") == "spaces"
+
+
+def test_save_and_load_cached(tmp_path, sample_lead_row):
+    """Generated messages are saved to files and can be loaded back."""
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+
+    messages = {
+        "cold_email": "Test cold email body",
+        "linkedin_request": "Test connection request",
+        "linkedin_followup": "Test follow-up message",
+        "follow_up_email": "Test follow-up email",
+    }
+
+    gen.save_outreach(
+        brand_name="Portland Running Company",
+        messages=messages,
+        template_name="test-template",
+        contact_name="John Smith",
+        model="gpt-4o",
+    )
+
+    # Verify files exist
+    slug = "portland-running-company"
+    assert (tmp_path / f"{slug}_cold_email.md").exists()
+    assert (tmp_path / f"{slug}_linkedin_request.md").exists()
+    assert (tmp_path / f"{slug}_linkedin_followup.md").exists()
+    assert (tmp_path / f"{slug}_follow_up_email.md").exists()
+
+    # Load them back
+    loaded = gen.load_cached_outreach("Portland Running Company")
+    assert loaded is not None
+    assert len(loaded) == 4
+    assert "Test cold email body" in loaded["cold_email"]
+
+
+def test_load_cached_nonexistent(tmp_path):
+    """Loading non-existent outreach returns None."""
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+    result = gen.load_cached_outreach("Nonexistent Brand")
+    assert result is None
+
+
+def test_save_creates_directory(tmp_path):
+    """Save creates the outreach directory if it doesn't exist."""
+    outreach_dir = tmp_path / "nested" / "outreach"
+    gen = OutreachGenerator(outreach_dir=outreach_dir)
+
+    messages = {
+        "cold_email": "Test",
+        "linkedin_request": "Test",
+        "linkedin_followup": "Test",
+        "follow_up_email": "Test",
+    }
+
+    gen.save_outreach("Test Brand", messages, "template", "Contact", "gpt-4o")
+    assert outreach_dir.exists()
+
+
+def test_saved_file_has_metadata_header(tmp_path):
+    """Saved files include YAML-like metadata header."""
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+
+    messages = {"cold_email": "Email body here"}
+    gen.save_outreach("Test Brand", messages, "my-template", "John", "gpt-4o")
+
+    content = (tmp_path / "test-brand_cold_email.md").read_text()
+    assert "brand: Test Brand" in content
+    assert "template: my-template" in content
+    assert "contact: John" in content
+    assert "model: gpt-4o" in content
+    assert "Email body here" in content
