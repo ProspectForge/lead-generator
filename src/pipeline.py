@@ -18,7 +18,7 @@ from src.config import settings
 from src.places_search import PlacesSearcher, PlaceResult
 from src.brand_grouper import BrandGrouper, BrandGroup
 from src.ecommerce_check import EcommerceChecker
-from src.linkedin_enrich import LinkedInEnricher
+from src.linkedin_enrich import LinkedInEnricher, LinkedInCompanyData
 from src.apollo_enrich import ApolloEnricher
 from src.discovery import Discovery
 from src.lead_scorer import LeadScorer
@@ -799,6 +799,98 @@ class Pipeline:
         console.print(table)
 
         return enriched
+
+    async def stage_4b_quality_gate(self, enriched: list[dict]) -> list[dict]:
+        """Filter leads using Apollo/LinkedIn data and supplement contacts."""
+        self._show_stage_header("4b", "Quality Gate", "Verifying chain sizes and supplementing contacts")
+
+        if not enriched:
+            console.print("  [yellow]⚠ No leads to verify[/yellow]")
+            return []
+
+        max_locations = settings.quality_gate_max_locations
+        max_employees = settings.quality_gate_max_employees
+        enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
+
+        console.print(f"  [dim]• Checking {len(enriched)} leads[/dim]")
+        console.print(f"  [dim]• Max locations: {max_locations}, Max employees: {max_employees}[/dim]")
+        console.print()
+
+        passed = []
+        filtered_count = 0
+
+        for lead in enriched:
+            brand_name = lead.get("brand_name", "Unknown")
+            apollo_locs = lead.get("apollo_location_count")
+            employee_count = lead.get("employee_count")
+            linkedin_url = lead.get("linkedin_company", "")
+
+            # Signal 1: Apollo retail_location_count
+            if apollo_locs and isinstance(apollo_locs, (int, float)) and apollo_locs > max_locations:
+                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — Apollo says {int(apollo_locs)} locations")
+                filtered_count += 1
+                continue
+
+            # Signal 2: LinkedIn company page (only if Apollo location count is null)
+            linkedin_data = None
+            if apollo_locs is None and linkedin_url:
+                try:
+                    linkedin_data = await enricher.scrape_company_page(linkedin_url)
+
+                    if linkedin_data.location_count and linkedin_data.location_count > max_locations:
+                        console.print(f"  [red]✗ Filtered:[/red] {brand_name} — LinkedIn says {linkedin_data.location_count} locations")
+                        filtered_count += 1
+                        continue
+                except Exception:
+                    pass  # LinkedIn scrape failed, continue with other signals
+
+            # Signal 3: Employee count heuristic
+            if apollo_locs is None and employee_count and isinstance(employee_count, (int, float)) and employee_count > max_employees:
+                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — {int(employee_count)} employees (likely large chain)")
+                filtered_count += 1
+                continue
+
+            # Lead passed quality gate - supplement contacts from LinkedIn if available
+            # If we didn't scrape LinkedIn yet (Apollo data was present), scrape now for contacts
+            if linkedin_data is None and linkedin_url:
+                has_empty_slot = any(not lead.get(f"contact_{i}_name") for i in range(1, 5))
+                if has_empty_slot:
+                    try:
+                        linkedin_data = await enricher.scrape_company_page(linkedin_url)
+                    except Exception:
+                        pass
+
+            if linkedin_data and linkedin_data.people:
+                # Find empty contact slots and fill them
+                for i in range(1, 5):
+                    if not lead.get(f"contact_{i}_name"):
+                        # Find next LinkedIn person not already in contacts
+                        existing_names = {lead.get(f"contact_{j}_name", "").lower() for j in range(1, 5)}
+                        for person in linkedin_data.people:
+                            if person.name.lower() not in existing_names:
+                                lead[f"contact_{i}_name"] = person.name
+                                lead[f"contact_{i}_title"] = person.title
+                                lead[f"contact_{i}_linkedin"] = person.linkedin_url or ""
+                                if f"contact_{i}_email" not in lead:
+                                    lead[f"contact_{i}_email"] = ""
+                                if f"contact_{i}_phone" not in lead:
+                                    lead[f"contact_{i}_phone"] = ""
+                                existing_names.add(person.name.lower())
+                                break
+
+            passed.append(lead)
+            console.print(f"  [green]✓ Passed:[/green] {brand_name}")
+
+        # Summary
+        console.print()
+        table = Table(box=box.SIMPLE)
+        table.add_column("Status", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Passed quality gate", f"[bold green]{len(passed)}[/bold green]")
+        table.add_row("Filtered out", f"[bold red]{filtered_count}[/bold red]")
+        console.print(table)
+
+        return passed
 
     def stage_5_score(self, enriched: list[dict]) -> list[dict]:
         """Score leads based on tech stack and other signals."""
