@@ -322,3 +322,107 @@ def test_saved_file_has_metadata_header(tmp_path):
     assert "contact: John" in content
     assert "model: gpt-4o" in content
     assert "Email body here" in content
+
+
+@patch("src.outreach_generator.LLMClient")
+def test_regenerate_all(mock_llm_class, sample_lead_row, tmp_path):
+    """Regenerate all messages overwrites cached files."""
+    mock_client = MagicMock()
+    mock_llm_class.from_settings.return_value = mock_client
+    mock_client.generate.return_value = """## Cold Email
+
+Regenerated cold email.
+
+## LinkedIn Connection Request
+
+Regenerated request.
+
+## LinkedIn Follow-Up
+
+Regenerated follow-up.
+
+## Follow-Up Email
+
+Regenerated follow-up email.
+"""
+
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+
+    # Save initial messages
+    initial = {
+        "cold_email": "Old email",
+        "linkedin_request": "Old request",
+        "linkedin_followup": "Old follow-up",
+        "follow_up_email": "Old follow-up email",
+    }
+    gen.save_outreach("Portland Running Company", initial, "test", "John", "gpt-4o")
+
+    # Regenerate
+    messages = gen.regenerate(sample_lead_row, template_name="test")
+    assert "Regenerated cold email" in messages["cold_email"]
+
+
+@patch("src.outreach_generator.LLMClient")
+def test_regenerate_single_message(mock_llm_class, sample_lead_row, tmp_path):
+    """Regenerate a single message type."""
+    mock_client = MagicMock()
+    mock_llm_class.from_settings.return_value = mock_client
+    mock_client.generate.return_value = "New version of cold email."
+
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+
+    # Save initial
+    initial = {
+        "cold_email": "Old email",
+        "linkedin_request": "Keep this",
+        "linkedin_followup": "Keep this too",
+        "follow_up_email": "And this",
+    }
+    gen.save_outreach("Portland Running Company", initial, "test", "John", "gpt-4o")
+
+    # Regenerate only cold_email
+    messages = gen.regenerate_single(
+        sample_lead_row,
+        message_type="cold_email",
+        instructions="Make it shorter",
+    )
+
+    assert "New version" in messages["cold_email"]
+    # Other messages should be unchanged
+    assert "Keep this" in messages["linkedin_request"]
+
+
+@patch("src.outreach_generator.LLMClient")
+def test_regenerate_with_instructions(mock_llm_class, sample_lead_row, tmp_path):
+    """Regeneration passes user instructions to the LLM."""
+    mock_client = MagicMock()
+    mock_llm_class.from_settings.return_value = mock_client
+    mock_client.generate.return_value = """## Cold Email
+
+Shorter email.
+
+## LinkedIn Connection Request
+
+Shorter request.
+
+## LinkedIn Follow-Up
+
+Shorter follow-up.
+
+## Follow-Up Email
+
+Shorter follow-up email.
+"""
+
+    gen = OutreachGenerator(outreach_dir=tmp_path)
+    messages = gen.regenerate(
+        sample_lead_row,
+        template_name=None,
+        instructions="Make everything shorter and more casual",
+    )
+
+    # Verify instructions were passed to LLM
+    call_args = mock_client.generate.call_args
+    user_prompt = call_args.kwargs.get("user_prompt") or call_args[0][1]
+    assert "shorter" in user_prompt.lower()
+    assert "casual" in user_prompt.lower()

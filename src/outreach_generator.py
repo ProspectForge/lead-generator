@@ -284,3 +284,98 @@ class OutreachGenerator:
             (self.outreach_dir / f"{slug}_{msg_type}.md").exists()
             for msg_type in MESSAGE_TYPES
         )
+
+    def regenerate(
+        self,
+        lead_row: pd.Series,
+        template_name: Optional[str] = None,
+        contact_index: int = 1,
+        instructions: Optional[str] = None,
+    ) -> dict[str, str]:
+        """Regenerate all outreach messages, optionally with user instructions.
+
+        Args:
+            lead_row: Lead data.
+            template_name: Template name for guided mode, None for free-form.
+            contact_index: Which contact to use.
+            instructions: Optional user instructions (e.g. "make it shorter").
+
+        Returns:
+            Dict of regenerated messages.
+        """
+        template_content = None
+        if template_name:
+            try:
+                template_content = self._read_template(template_name)
+            except FileNotFoundError:
+                pass
+
+        system_prompt = SYSTEM_PROMPT_TEMPLATE if template_content else SYSTEM_PROMPT_FREEFORM
+        user_prompt = self._build_user_prompt(lead_row, contact_index, template_content)
+
+        if instructions:
+            user_prompt += f"\n\nAdditional instructions: {instructions}"
+
+        client = LLMClient.from_settings()
+        response = client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        messages = self._parse_response(response)
+
+        # Save regenerated messages
+        brand_name = str(lead_row.get("brand_name", "unknown"))
+        contact_name = str(lead_row.get(f"contact_{contact_index}_name", "Unknown"))
+        model = settings.outreach.llm_model
+        self.save_outreach(brand_name, messages, template_name or "free-form", contact_name, model, instructions)
+
+        return messages
+
+    def regenerate_single(
+        self,
+        lead_row: pd.Series,
+        message_type: str,
+        instructions: Optional[str] = None,
+        contact_index: int = 1,
+    ) -> dict[str, str]:
+        """Regenerate a single message type.
+
+        Args:
+            lead_row: Lead data.
+            message_type: One of the MESSAGE_TYPES keys.
+            instructions: Optional user instructions.
+            contact_index: Which contact to use.
+
+        Returns:
+            Dict of all messages (with the specified one regenerated).
+        """
+        brand_name = str(lead_row.get("brand_name", "unknown"))
+
+        # Load existing messages
+        existing = self.load_cached_outreach(brand_name) or {}
+
+        # Build prompt for single message
+        lead_data = self._format_lead_data(lead_row, contact_index)
+        heading = MESSAGE_TYPES.get(message_type, message_type)
+
+        system_prompt = SYSTEM_PROMPT_FREEFORM
+        user_prompt = f"Here is the lead data:\n{lead_data}\n\n"
+
+        if message_type in existing:
+            user_prompt += f"Here is the previous {heading}:\n{existing[message_type]}\n\n"
+
+        if instructions:
+            user_prompt += f"User feedback: {instructions}\n\n"
+
+        user_prompt += f"Regenerate the {heading}. Output only the message text, no heading."
+
+        client = LLMClient.from_settings()
+        response = client.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        # Update the single message
+        existing[message_type] = response.strip()
+
+        # Save all messages
+        contact_name = str(lead_row.get(f"contact_{contact_index}_name", "Unknown"))
+        model = settings.outreach.llm_model
+        self.save_outreach(brand_name, existing, "regenerated", contact_name, model, instructions)
+
+        return existing
