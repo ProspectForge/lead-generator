@@ -14,7 +14,11 @@ except ImportError:
     OpenAI = None
 
 
-def resolve_redirect(url: str, timeout: float = 5.0) -> str:
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+
+def resolve_redirect(url: str, timeout: float = 3.0) -> str:
     """
     Follow URL redirects and return the final URL.
 
@@ -40,6 +44,38 @@ def resolve_redirect(url: str, timeout: float = 5.0) -> str:
     except Exception:
         # On any error, return the original URL
         return url
+
+
+def resolve_redirects_parallel(urls: list[str], max_workers: int = 10, timeout: float = 3.0) -> dict[str, str]:
+    """
+    Resolve multiple URLs in parallel.
+
+    Args:
+        urls: List of URLs to resolve
+        max_workers: Maximum parallel workers
+        timeout: Timeout per request
+
+    Returns:
+        Dict mapping original URL to final URL
+    """
+    results = {}
+    unique_urls = list(set(url for url in urls if url))
+
+    if not unique_urls:
+        return results
+
+    def resolve_one(url: str) -> tuple[str, str]:
+        try:
+            return (url, resolve_redirect(url, timeout))
+        except Exception:
+            # On any error, return original URL
+            return (url, url)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for original, resolved in executor.map(resolve_one, unique_urls):
+            results[original] = resolved
+
+    return results
 
 
 class NameNormalizer:
@@ -346,6 +382,12 @@ class BrandGrouper:
 
     def group(self, places: list[dict]) -> list[BrandGroup]:
         """Group places by normalized name and domain."""
+        # Phase 0: Pre-resolve all URLs in parallel for performance
+        if self.resolve_redirects:
+            urls = [place.get("website", "") for place in places if place.get("website")]
+            resolved = resolve_redirects_parallel(urls, max_workers=50, timeout=3.0)
+            self._redirect_cache.update(resolved)
+
         # Phase 1: Initial grouping by (normalized_name, domain)
         groups: dict[tuple[str, str], BrandGroup] = defaultdict(
             lambda: BrandGroup(normalized_name="")

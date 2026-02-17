@@ -286,7 +286,7 @@ class TestURLRedirection:
     def test_groups_by_final_redirect_url(self, mock_resolve):
         """Different URLs that redirect to the same domain should be grouped."""
         # Mock redirects: both URLs redirect to popeyescanada.com
-        def mock_redirect(url):
+        def mock_redirect(url, timeout=3.0):
             redirects = {
                 "https://popeyestoronto.com": "https://popeyescanada.com",
                 "https://popeyesvancouver.com": "https://popeyescanada.com",
@@ -313,7 +313,7 @@ class TestURLRedirection:
     @patch('src.brand_grouper.resolve_redirect')
     def test_handles_redirect_timeout(self, mock_resolve):
         """Should fall back to original URL if redirect resolution fails."""
-        def mock_redirect(url):
+        def mock_redirect(url, timeout=3.0):
             if "slow" in url:
                 raise TimeoutError("Connection timed out")
             return url
