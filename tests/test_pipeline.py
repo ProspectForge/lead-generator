@@ -90,3 +90,47 @@ async def test_pipeline_includes_scoring_stage():
     assert scored[0]["brand_name"] == "Fleet Feet"
     assert scored[0]["uses_lightspeed"] is True
     assert scored[0]["priority_score"] > scored[1]["priority_score"]
+
+
+@pytest.mark.asyncio
+async def test_linkedin_enrichment_uses_page_scrape():
+    """LinkedIn enrichment path uses direct page scrape instead of Google searches."""
+    pipeline = Pipeline()
+
+    brands = [
+        BrandGroup(
+            normalized_name="test brand",
+            original_names=["Test Brand"],
+            location_count=5,
+            locations=[{"name": "Test Brand", "address": "123 Main St"}],
+            website="https://testbrand.com",
+            cities=["Toronto"],
+        )
+    ]
+
+    mock_company_data = MagicMock()
+    mock_company_data.location_count = 5
+    mock_company_data.employee_range = "11-50"
+    mock_company_data.industry = "Retail"
+    person1 = MagicMock()
+    person1.name = "John CEO"
+    person1.title = "CEO"
+    person1.linkedin_url = "https://linkedin.com/in/john"
+    person2 = MagicMock()
+    person2.name = "Jane COO"
+    person2.title = "COO"
+    person2.linkedin_url = "https://linkedin.com/in/jane"
+    mock_company_data.people = [person1, person2]
+
+    with patch('src.pipeline.LinkedInEnricher') as mock_enricher_cls:
+        mock_enricher = MagicMock()
+        mock_enricher.find_company = AsyncMock(return_value="https://linkedin.com/company/test-brand")
+        mock_enricher.scrape_company_page = AsyncMock(return_value=mock_company_data)
+        mock_enricher_cls.return_value = mock_enricher
+
+        result = await pipeline._enrich_with_linkedin(brands)
+
+    assert len(result) == 1
+    assert result[0]["contact_1_name"] == "John CEO"
+    assert result[0]["contact_1_title"] == "CEO"
+    mock_enricher.scrape_company_page.assert_called_once()

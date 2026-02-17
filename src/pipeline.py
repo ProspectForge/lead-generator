@@ -686,7 +686,7 @@ class Pipeline:
         return enriched
 
     async def _enrich_with_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
-        """Enrich using LinkedIn scraping (legacy fallback)."""
+        """Enrich using LinkedIn page scraping."""
         enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
         enriched = []
 
@@ -699,9 +699,7 @@ class Pipeline:
             "other": 0,
         }
 
-        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via LinkedIn scraping[/dim]")
-        console.print(f"  [yellow]⚠ Warning: LinkedIn scraping produces lower quality results[/yellow]")
-        console.print(f"  [dim]  Consider using Apollo.io for verified contacts[/dim]")
+        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via LinkedIn page scraping[/dim]")
         console.print()
 
         with Progress(
@@ -719,15 +717,22 @@ class Pipeline:
                 progress.update(task, description=f"[cyan]Searching[/cyan] {brand_name}")
 
                 try:
-                    result = await enricher.enrich(brand.normalized_name, brand.website or "")
+                    # Step 1: Find LinkedIn company URL
+                    linkedin_url = await enricher.find_company(brand.normalized_name, brand.website or "")
 
-                    if result.linkedin_company_url:
+                    linkedin_data = None
+                    contacts = []
+
+                    if linkedin_url:
                         stats["linkedin_pages_found"] += 1
 
-                    contact_types = []
-                    for contact in result.contacts:
+                        # Step 2: Scrape the company page directly
+                        linkedin_data = await enricher.scrape_company_page(linkedin_url)
+                        contacts = linkedin_data.people[:4] if linkedin_data.people else []
+
+                    # Track contact stats
+                    for contact in contacts:
                         category = self._categorize_contact(contact.title)
-                        contact_types.append(category)
                         stats["total_contacts"] += 1
                         if category == "C-Suite":
                             stats["c_suite"] += 1
@@ -745,7 +750,7 @@ class Pipeline:
                         if addr and addr not in addresses:
                             addresses.append(addr)
 
-                    enriched.append({
+                    row = {
                         "brand_name": brand_name,
                         "location_count": brand.location_count,
                         "website": brand.website,
@@ -755,37 +760,37 @@ class Pipeline:
                         "priority": brand.priority,
                         "cities": ", ".join(brand.cities[:5]),
                         "addresses": " | ".join(addresses),
-                        "linkedin_company": result.linkedin_company_url or "",
-                        "employee_count": "",
-                        "industry": "",
-                        "contact_1_name": result.contacts[0].name if len(result.contacts) > 0 else "",
-                        "contact_1_title": result.contacts[0].title if len(result.contacts) > 0 else "",
-                        "contact_1_email": "",
-                        "contact_1_phone": "",
-                        "contact_1_linkedin": result.contacts[0].linkedin_url if len(result.contacts) > 0 else "",
-                        "contact_2_name": result.contacts[1].name if len(result.contacts) > 1 else "",
-                        "contact_2_title": result.contacts[1].title if len(result.contacts) > 1 else "",
-                        "contact_2_email": "",
-                        "contact_2_phone": "",
-                        "contact_2_linkedin": result.contacts[1].linkedin_url if len(result.contacts) > 1 else "",
-                        "contact_3_name": result.contacts[2].name if len(result.contacts) > 2 else "",
-                        "contact_3_title": result.contacts[2].title if len(result.contacts) > 2 else "",
-                        "contact_3_email": "",
-                        "contact_3_phone": "",
-                        "contact_3_linkedin": result.contacts[2].linkedin_url if len(result.contacts) > 2 else "",
-                        "contact_4_name": result.contacts[3].name if len(result.contacts) > 3 else "",
-                        "contact_4_title": result.contacts[3].title if len(result.contacts) > 3 else "",
-                        "contact_4_email": "",
-                        "contact_4_phone": "",
-                        "contact_4_linkedin": result.contacts[3].linkedin_url if len(result.contacts) > 3 else "",
-                    })
+                        "linkedin_company": linkedin_url or "",
+                        "employee_count": linkedin_data.employee_range if linkedin_data else "",
+                        "industry": linkedin_data.industry if linkedin_data else "",
+                        "apollo_location_count": linkedin_data.location_count if linkedin_data else None,
+                    }
 
-                    if contact_types:
-                        progress.update(task, description=f"[green]✓[/green] {brand_name}: {len(result.contacts)} contacts")
+                    # Add contacts (up to 4)
+                    for i in range(4):
+                        if i < len(contacts):
+                            row[f"contact_{i+1}_name"] = contacts[i].name
+                            row[f"contact_{i+1}_title"] = contacts[i].title
+                            row[f"contact_{i+1}_email"] = ""
+                            row[f"contact_{i+1}_phone"] = ""
+                            row[f"contact_{i+1}_linkedin"] = contacts[i].linkedin_url or ""
+                        else:
+                            row[f"contact_{i+1}_name"] = ""
+                            row[f"contact_{i+1}_title"] = ""
+                            row[f"contact_{i+1}_email"] = ""
+                            row[f"contact_{i+1}_phone"] = ""
+                            row[f"contact_{i+1}_linkedin"] = ""
+
+                    enriched.append(row)
+
+                    if contacts:
+                        progress.update(task, description=f"[green]✓[/green] {brand_name}: {len(contacts)} contacts")
                     else:
                         progress.update(task, description=f"[yellow]○[/yellow] {brand_name}: No data found")
 
                     await asyncio.sleep(1.0)
+                except RuntimeError:
+                    raise  # Re-raise credit exhaustion
                 except Exception as e:
                     console.print(f"  [red]✗ Error enriching {brand_name}: {e}[/red]")
 
