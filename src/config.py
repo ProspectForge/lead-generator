@@ -33,11 +33,20 @@ class EmailVerificationSettings:
 
 
 @dataclass
+class OutreachSettings:
+    """Settings for outreach message generation."""
+    llm_provider: str = "openai"       # "openai" or "anthropic"
+    llm_model: str = "gpt-4o"          # model name
+    default_template: str = ""         # default template filename
+
+
+@dataclass
 class Settings:
     google_places_api_key: str = ""
     firecrawl_api_key: str = ""
     openai_api_key: str = ""
     apollo_api_key: str = ""
+    anthropic_api_key: str = ""
     cities: dict = field(default_factory=dict)
     search_queries: dict = field(default_factory=dict)
     known_large_chains: set = field(default_factory=set)
@@ -48,12 +57,14 @@ class Settings:
     llm: LLMSettings = field(default_factory=LLMSettings)
     enrichment: EnrichmentSettings = field(default_factory=EnrichmentSettings)
     email_verification: EmailVerificationSettings = field(default_factory=EmailVerificationSettings)
+    outreach: OutreachSettings = field(default_factory=OutreachSettings)
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.apollo_api_key = os.getenv("APOLLO_API_KEY", "")
+        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
 
         config_path = Path(__file__).parent.parent / "config" / "cities.json"
         with open(config_path) as f:
@@ -92,6 +103,14 @@ class Settings:
             enabled=email_config.get("enabled", False),
             verify_smtp=email_config.get("verify_smtp", False),
             include_risky=email_config.get("include_risky", False)
+        )
+
+        # Load outreach settings
+        outreach_config = config.get("outreach", {})
+        self.outreach = OutreachSettings(
+            llm_provider=outreach_config.get("llm_provider", "openai"),
+            llm_model=outreach_config.get("llm_model", "gpt-4o"),
+            default_template=outreach_config.get("default_template", ""),
         )
 
     def get_all_city_names(self) -> list[str]:
