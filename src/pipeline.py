@@ -40,12 +40,16 @@ class Checkpoint:
     ecommerce_brands: list[dict] = field(default_factory=list)
     enriched: list[dict] = field(default_factory=list)
     timestamp: str = ""
+    saved_settings: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Checkpoint":
+        # Handle checkpoints saved before saved_settings was added
+        if "saved_settings" not in data:
+            data["saved_settings"] = {}
         return cls(**data)
 
 
@@ -133,9 +137,49 @@ class Pipeline:
             console.print(f"[yellow]⚠ Could not load checkpoint: {e}[/yellow]")
             return None
 
+    @staticmethod
+    def _snapshot_settings() -> dict:
+        """Capture current settings for checkpoint storage."""
+        return {
+            "search_concurrency": settings.search_concurrency,
+            "ecommerce_concurrency": settings.ecommerce_concurrency,
+            "health_check_concurrency": settings.health_check_concurrency,
+            "enrichment_enabled": settings.enrichment.enabled,
+            "enrichment_provider": settings.enrichment.provider,
+            "enrichment_max_contacts": settings.enrichment.max_contacts,
+            "quality_gate_max_locations": settings.quality_gate_max_locations,
+            "quality_gate_max_employees": settings.quality_gate_max_employees,
+            "ecommerce_pages_to_check": settings.ecommerce_pages_to_check,
+        }
+
+    @staticmethod
+    def apply_settings(saved: dict):
+        """Apply saved settings from a checkpoint to the current settings object."""
+        if not saved:
+            return
+        if "search_concurrency" in saved:
+            settings.search_concurrency = saved["search_concurrency"]
+        if "ecommerce_concurrency" in saved:
+            settings.ecommerce_concurrency = saved["ecommerce_concurrency"]
+        if "health_check_concurrency" in saved:
+            settings.health_check_concurrency = saved["health_check_concurrency"]
+        if "enrichment_enabled" in saved:
+            settings.enrichment.enabled = saved["enrichment_enabled"]
+        if "enrichment_provider" in saved:
+            settings.enrichment.provider = saved["enrichment_provider"]
+        if "enrichment_max_contacts" in saved:
+            settings.enrichment.max_contacts = saved["enrichment_max_contacts"]
+        if "quality_gate_max_locations" in saved:
+            settings.quality_gate_max_locations = saved["quality_gate_max_locations"]
+        if "quality_gate_max_employees" in saved:
+            settings.quality_gate_max_employees = saved["quality_gate_max_employees"]
+        if "ecommerce_pages_to_check" in saved:
+            settings.ecommerce_pages_to_check = saved["ecommerce_pages_to_check"]
+
     def _save_checkpoint(self, checkpoint: Checkpoint):
         """Save checkpoint to file."""
         checkpoint.timestamp = datetime.now().isoformat()
+        checkpoint.saved_settings = self._snapshot_settings()
 
         # Use existing checkpoint path or create new one
         if self._current_checkpoint_path:
@@ -1178,12 +1222,41 @@ class Pipeline:
                 verticals = checkpoint.verticals
                 countries = checkpoint.countries
                 console.print()
+                enrichment_status = (
+                    f"[green]Enabled[/green] ({settings.enrichment.provider})"
+                    if settings.enrichment.enabled
+                    else "[dim]Disabled[/dim]"
+                )
+                settings_block = (
+                    f"[bold]Active Settings:[/bold]\n"
+                    f"  Search concurrency:       {settings.search_concurrency}\n"
+                    f"  E-commerce concurrency:   {settings.ecommerce_concurrency}\n"
+                    f"  Health check concurrency: {settings.health_check_concurrency}\n"
+                    f"  Enrichment:               {enrichment_status}\n"
+                    f"  Quality gate:             ≤{settings.quality_gate_max_locations} locations, ≤{settings.quality_gate_max_employees} employees"
+                )
+                # Show what changed vs original run
+                saved = checkpoint.saved_settings
+                if saved:
+                    diffs = []
+                    if saved.get("search_concurrency") != settings.search_concurrency:
+                        diffs.append(f"search_concurrency: {saved['search_concurrency']} → {settings.search_concurrency}")
+                    if saved.get("ecommerce_concurrency") != settings.ecommerce_concurrency:
+                        diffs.append(f"ecommerce_concurrency: {saved['ecommerce_concurrency']} → {settings.ecommerce_concurrency}")
+                    if saved.get("health_check_concurrency") != settings.health_check_concurrency:
+                        diffs.append(f"health_check_concurrency: {saved['health_check_concurrency']} → {settings.health_check_concurrency}")
+                    if saved.get("enrichment_enabled") != settings.enrichment.enabled:
+                        diffs.append(f"enrichment: {'enabled' if saved.get('enrichment_enabled') else 'disabled'} → {'enabled' if settings.enrichment.enabled else 'disabled'}")
+                    if diffs:
+                        settings_block += "\n\n[bold yellow]Changed from original run:[/bold yellow]\n  " + "\n  ".join(diffs)
+
                 console.print(Panel(
                     f"[bold yellow]Resuming Pipeline[/bold yellow]\n\n"
                     f"Last completed: Stage {checkpoint.stage}\n"
                     f"Verticals: {', '.join(verticals)}\n"
                     f"Countries: {', '.join(countries)}\n"
-                    f"Saved at: {checkpoint.timestamp}",
+                    f"Saved at: {checkpoint.timestamp}\n\n"
+                    f"{settings_block}",
                     title="[bold yellow]⏯ Resuming[/bold yellow]",
                     border_style="yellow",
                 ))
@@ -1194,11 +1267,22 @@ class Pipeline:
                 verticals=verticals,
                 countries=countries,
             )
+            enrichment_status = (
+                f"[green]Enabled[/green] ({settings.enrichment.provider})"
+                if settings.enrichment.enabled
+                else "[dim]Disabled[/dim]"
+            )
             console.print()
             console.print(Panel(
                 "[bold]Pipeline Starting[/bold]\n\n"
                 f"Verticals: {', '.join(verticals)}\n"
-                f"Countries: {', '.join(countries)}",
+                f"Countries: {', '.join(countries)}\n\n"
+                f"[bold]Settings:[/bold]\n"
+                f"  Search concurrency:    {settings.search_concurrency}\n"
+                f"  E-commerce concurrency:{settings.ecommerce_concurrency}\n"
+                f"  Health check concurrency: {settings.health_check_concurrency}\n"
+                f"  Enrichment:            {enrichment_status}\n"
+                f"  Quality gate:          ≤{settings.quality_gate_max_locations} locations, ≤{settings.quality_gate_max_employees} employees",
                 title="[bold blue]🚀 Lead Generator[/bold blue]",
                 border_style="blue",
             ))

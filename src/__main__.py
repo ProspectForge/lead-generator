@@ -583,6 +583,32 @@ def _interactive_resume_run(pipeline: Pipeline, checkpoints: list):
     if not selection:
         return
 
+    # Load checkpoint to show saved settings
+    checkpoint = pipeline.load_checkpoint(selection)
+    if checkpoint and checkpoint.saved_settings:
+        _show_checkpoint_settings(checkpoint.saved_settings)
+
+    # Offer to edit settings before resuming
+    action = inquirer.select(
+        message="Ready to resume?",
+        choices=[
+            {"name": "▶️  Resume with current settings", "value": "resume"},
+            {"name": "⚙️  Edit settings before resuming", "value": "edit"},
+            {"name": "🔄 Restore original run settings", "value": "restore"},
+            {"name": "Cancel", "value": "cancel"},
+        ],
+    ).execute()
+
+    if action == "cancel":
+        return
+
+    if action == "restore" and checkpoint and checkpoint.saved_settings:
+        Pipeline.apply_settings(checkpoint.saved_settings)
+        console.print("[green]✓ Restored settings from original run[/green]")
+
+    if action == "edit":
+        _edit_resume_settings()
+
     console.print()
     console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
@@ -597,6 +623,91 @@ def _interactive_resume_run(pipeline: Pipeline, checkpoints: list):
         ))
     except KeyboardInterrupt:
         console.print("\n[yellow]Pipeline interrupted. Progress saved to checkpoint.[/yellow]")
+
+
+def _show_checkpoint_settings(saved: dict):
+    """Show saved checkpoint settings vs current settings."""
+    table = Table(title="Settings Comparison", box=box.ROUNDED)
+    table.add_column("Setting", style="cyan")
+    table.add_column("Original Run", justify="right")
+    table.add_column("Current", justify="right")
+    table.add_column("", width=3)
+
+    def _row(label, key, current_val):
+        orig = saved.get(key)
+        if orig is None:
+            return
+        changed = str(orig) != str(current_val)
+        marker = "[yellow]*[/yellow]" if changed else ""
+        table.add_row(label, str(orig), str(current_val), marker)
+
+    _row("Search concurrency", "search_concurrency", settings.search_concurrency)
+    _row("E-commerce concurrency", "ecommerce_concurrency", settings.ecommerce_concurrency)
+    _row("Health check concurrency", "health_check_concurrency", settings.health_check_concurrency)
+    _row("Enrichment enabled", "enrichment_enabled", settings.enrichment.enabled)
+    _row("Enrichment provider", "enrichment_provider", settings.enrichment.provider)
+    _row("Max contacts", "enrichment_max_contacts", settings.enrichment.max_contacts)
+    _row("Quality gate max locations", "quality_gate_max_locations", settings.quality_gate_max_locations)
+    _row("Quality gate max employees", "quality_gate_max_employees", settings.quality_gate_max_employees)
+    _row("Pages to check", "ecommerce_pages_to_check", settings.ecommerce_pages_to_check)
+
+    console.print()
+    console.print(table)
+    console.print("[dim]* = changed from original run[/dim]\n")
+
+
+def _edit_resume_settings():
+    """Let user edit pipeline settings before resuming."""
+    console.print("\n[bold]Edit settings[/bold] (press Enter to keep current value)\n")
+
+    search_conc = inquirer.number(
+        message="Search concurrency:",
+        default=settings.search_concurrency,
+    ).execute()
+    settings.search_concurrency = int(search_conc)
+
+    ecom_conc = inquirer.number(
+        message="E-commerce concurrency:",
+        default=settings.ecommerce_concurrency,
+    ).execute()
+    settings.ecommerce_concurrency = int(ecom_conc)
+
+    health_conc = inquirer.number(
+        message="Health check concurrency:",
+        default=settings.health_check_concurrency,
+    ).execute()
+    settings.health_check_concurrency = int(health_conc)
+
+    enrich_enabled = inquirer.confirm(
+        message="Enable enrichment?",
+        default=settings.enrichment.enabled,
+    ).execute()
+    settings.enrichment.enabled = enrich_enabled
+
+    if enrich_enabled:
+        provider = inquirer.select(
+            message="Enrichment provider:",
+            choices=[
+                {"name": "Apollo", "value": "apollo"},
+                {"name": "LinkedIn (free)", "value": "linkedin"},
+            ],
+            default=settings.enrichment.provider,
+        ).execute()
+        settings.enrichment.provider = provider
+
+    max_locs = inquirer.number(
+        message="Quality gate max locations:",
+        default=settings.quality_gate_max_locations,
+    ).execute()
+    settings.quality_gate_max_locations = int(max_locs)
+
+    max_emp = inquirer.number(
+        message="Quality gate max employees:",
+        default=settings.quality_gate_max_employees,
+    ).execute()
+    settings.quality_gate_max_employees = int(max_emp)
+
+    console.print("[green]✓ Settings updated[/green]")
 
 
 def _interactive_results():
