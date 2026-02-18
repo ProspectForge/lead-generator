@@ -22,7 +22,7 @@ def mock_company_page():
 
 @pytest.mark.asyncio
 async def test_finds_company_linkedin_page(mock_company_page):
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
     with patch.object(enricher, '_search_linkedin', new_callable=AsyncMock) as mock_search:
         mock_search.return_value = "https://linkedin.com/company/lululemon"
@@ -33,7 +33,7 @@ async def test_finds_company_linkedin_page(mock_company_page):
 
 @pytest.mark.asyncio
 async def test_finds_contacts_by_title():
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
     with patch.object(enricher, '_search_people', new_callable=AsyncMock) as mock_search:
         mock_search.return_value = [
@@ -49,10 +49,8 @@ async def test_finds_contacts_by_title():
 
 @pytest.fixture
 def linkedin_company_page_markdown():
-    """Realistic LinkedIn company page markdown as returned by Firecrawl."""
-    return {
-        "data": {
-            "markdown": """
+    """Realistic LinkedIn company page markdown."""
+    return """
 # Flaman Fitness
 
 ## About
@@ -84,16 +82,12 @@ Director of Operations
 [**Lisa Chen**](https://www.linkedin.com/in/lisa-chen-retail)
 Marketing Manager
 """
-        }
-    }
 
 
 @pytest.fixture
 def linkedin_page_no_locations():
     """LinkedIn page without location count."""
-    return {
-        "data": {
-            "markdown": """
+    return """
 # Small Store Co
 
 ## About
@@ -106,15 +100,13 @@ def linkedin_page_no_locations():
 [**Jane Owner**](https://www.linkedin.com/in/jane-owner)
 Founder & CEO
 """
-        }
-    }
 
 
 @pytest.mark.asyncio
 async def test_scrape_company_page_extracts_locations(linkedin_company_page_markdown):
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
-    with patch.object(enricher, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
+    with patch.object(enricher, '_fetch_html', new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = linkedin_company_page_markdown
 
         result = await enricher.scrape_company_page("https://linkedin.com/company/flaman-fitness-ca")
@@ -124,9 +116,9 @@ async def test_scrape_company_page_extracts_locations(linkedin_company_page_mark
 
 @pytest.mark.asyncio
 async def test_scrape_company_page_extracts_people(linkedin_company_page_markdown):
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
-    with patch.object(enricher, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
+    with patch.object(enricher, '_fetch_html', new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = linkedin_company_page_markdown
 
         result = await enricher.scrape_company_page("https://linkedin.com/company/flaman-fitness-ca")
@@ -139,9 +131,9 @@ async def test_scrape_company_page_extracts_people(linkedin_company_page_markdow
 
 @pytest.mark.asyncio
 async def test_scrape_company_page_extracts_employee_range(linkedin_company_page_markdown):
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
-    with patch.object(enricher, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
+    with patch.object(enricher, '_fetch_html', new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = linkedin_company_page_markdown
 
         result = await enricher.scrape_company_page("https://linkedin.com/company/flaman-fitness-ca")
@@ -151,9 +143,9 @@ async def test_scrape_company_page_extracts_employee_range(linkedin_company_page
 
 @pytest.mark.asyncio
 async def test_scrape_company_page_handles_missing_locations(linkedin_page_no_locations):
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
-    with patch.object(enricher, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
+    with patch.object(enricher, '_fetch_html', new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = linkedin_page_no_locations
 
         result = await enricher.scrape_company_page("https://linkedin.com/company/small-store")
@@ -164,10 +156,10 @@ async def test_scrape_company_page_handles_missing_locations(linkedin_page_no_lo
 
 @pytest.mark.asyncio
 async def test_scrape_company_page_handles_fetch_failure():
-    enricher = LinkedInEnricher(api_key="test_key")
+    enricher = LinkedInEnricher()
 
-    with patch.object(enricher, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.side_effect = Exception("Firecrawl error")
+    with patch.object(enricher, '_fetch_html', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.side_effect = Exception("Connection failed")
 
         result = await enricher.scrape_company_page("https://linkedin.com/company/broken")
 

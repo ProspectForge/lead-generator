@@ -484,6 +484,7 @@ class Pipeline:
         console.print()
 
         crawl_failure_count = 0
+        fail_reasons: dict[str, int] = {}
 
         async def check_brand(brand: BrandGroup, progress, task) -> tuple[BrandGroup, bool]:
             """Check a single brand with semaphore for rate limiting."""
@@ -493,6 +494,8 @@ class Pipeline:
                     result = await checker.check(brand.website)
                     if result.crawl_failed:
                         crawl_failure_count += 1
+                        reason = result.fail_reason or "Unknown"
+                        fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
                     # Attach marketplace and platform data to brand
                     brand.marketplaces = result.marketplaces
                     brand.marketplace_links = result.marketplace_links
@@ -502,6 +505,8 @@ class Pipeline:
                     return (brand, result.has_ecommerce)
                 except Exception as e:
                     crawl_failure_count += 1
+                    reason = str(type(e).__name__)
+                    fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
                     console.print(f"  [red]✗ Error: {brand.normalized_name.title()}: {e}[/red]")
                     progress.advance(task)
                     return (brand, False)
@@ -531,18 +536,19 @@ class Pipeline:
         table.add_column("Count", style="green", justify="right")
         table.add_row("With e-commerce", f"[bold green]{len(ecommerce_brands)}[/bold green]")
         table.add_row("Without e-commerce", str(no_ecommerce_count))
-        table.add_row("Crawl failed (Firecrawl)", str(crawl_failure_count))
+        table.add_row("Fetch failed", str(crawl_failure_count))
         table.add_row("Skipped (no website)", str(skipped))
         console.print(table)
 
-        # Warn if most crawls failed — likely an API issue
-        if crawl_failure_count > 0 and len(brands_with_website) > 0:
-            failure_rate = crawl_failure_count / len(brands_with_website)
-            if failure_rate > 0.5:
-                console.print()
-                console.print(f"  [bold red]⚠ WARNING: {crawl_failure_count}/{len(brands_with_website)} ({failure_rate:.0%}) crawls failed![/bold red]")
-                console.print(f"  [red]  This likely indicates a Firecrawl API issue (exhausted credits, invalid key, or rate limits).[/red]")
-                console.print(f"  [red]  Check your FIRECRAWL_API_KEY and credits at https://firecrawl.dev[/red]")
+        # Show failure breakdown if any fetches failed
+        if fail_reasons:
+            console.print()
+            fail_table = Table(box=box.SIMPLE, title="[dim]Fetch failure reasons[/dim]")
+            fail_table.add_column("Reason", style="red")
+            fail_table.add_column("Count", style="yellow", justify="right")
+            for reason, count in sorted(fail_reasons.items(), key=lambda x: -x[1]):
+                fail_table.add_row(reason, str(count))
+            console.print(fail_table)
 
         return ecommerce_brands
 
@@ -702,7 +708,7 @@ class Pipeline:
 
     async def _enrich_with_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
         """Enrich using LinkedIn page scraping."""
-        enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
+        enricher = LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
         enriched = []
 
         stats = {
@@ -833,7 +839,7 @@ class Pipeline:
 
         max_locations = settings.quality_gate_max_locations
         max_employees = settings.quality_gate_max_employees
-        enricher = LinkedInEnricher(api_key=settings.firecrawl_api_key)
+        enricher = LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
 
         console.print(f"  [dim]• Checking {len(enriched)} leads[/dim]")
         console.print(f"  [dim]• Max locations: {max_locations}, Max employees: {max_employees}[/dim]")
@@ -1022,6 +1028,136 @@ class Pipeline:
 
         return str(output_file)
 
+    def _brands_to_leads(self, brands: list[BrandGroup]) -> list[dict]:
+        """Convert BrandGroups to lead dicts without enrichment data."""
+        leads = []
+        for brand in brands:
+            addresses = []
+            for loc in brand.locations:
+                addr = loc.get("address", "")
+                if addr and addr not in addresses:
+                    addresses.append(addr)
+
+            row = {
+                "brand_name": brand.normalized_name.title(),
+                "location_count": brand.location_count,
+                "website": brand.website,
+                "has_ecommerce": True,
+                "ecommerce_platform": brand.ecommerce_platform or "",
+                "marketplaces": ", ".join(brand.marketplaces),
+                "priority": brand.priority,
+                "cities": ", ".join(brand.cities[:5]),
+                "addresses": " | ".join(addresses),
+                "linkedin_company": "",
+                "employee_count": "",
+                "industry": "",
+            }
+
+            # Empty contact slots
+            for i in range(1, 5):
+                row[f"contact_{i}_name"] = ""
+                row[f"contact_{i}_title"] = ""
+                row[f"contact_{i}_email"] = ""
+                row[f"contact_{i}_phone"] = ""
+                row[f"contact_{i}_linkedin"] = ""
+
+            leads.append(row)
+        return leads
+
+    async def enrich_csv(self, csv_path: str, max_contacts: int = 4) -> str:
+        """Enrich an existing leads CSV with Apollo contact data."""
+        import pandas as pd
+
+        self._show_stage_header(4, "Apollo Enrichment", "Enriching existing leads with contact data")
+
+        if not settings.apollo_api_key:
+            console.print("  [red]APOLLO_API_KEY not set in .env[/red]")
+            console.print("  [dim]  Get your key at: https://app.apollo.io/[/dim]")
+            return csv_path
+
+        df = pd.read_csv(csv_path)
+        console.print(f"  [dim]• Loaded {len(df)} leads from {csv_path}[/dim]")
+
+        enricher = ApolloEnricher(api_key=settings.apollo_api_key)
+        stats = {"companies_found": 0, "total_contacts": 0, "with_email": 0, "with_phone": 0}
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Enriching...", total=len(df))
+
+            for idx, row in df.iterrows():
+                brand_name = str(row.get("brand_name", ""))
+                website = str(row.get("website", ""))
+                progress.update(task, description=f"[cyan]Searching[/cyan] {brand_name}")
+
+                if not website or website == "nan":
+                    progress.advance(task)
+                    continue
+
+                try:
+                    result = await enricher.enrich(brand_name, website, max_contacts)
+                    if result:
+                        if result.company.linkedin_url:
+                            stats["companies_found"] += 1
+                            df.at[idx, "linkedin_company"] = result.company.linkedin_url
+                        if result.company.industry:
+                            df.at[idx, "industry"] = result.company.industry
+                        if result.company.employee_count:
+                            df.at[idx, "employee_count"] = result.company.employee_count
+
+                        for i, contact in enumerate(result.contacts[:4], 1):
+                            df.at[idx, f"contact_{i}_name"] = contact.name
+                            df.at[idx, f"contact_{i}_title"] = contact.title
+                            df.at[idx, f"contact_{i}_email"] = contact.email or ""
+                            df.at[idx, f"contact_{i}_phone"] = contact.phone or ""
+                            df.at[idx, f"contact_{i}_linkedin"] = contact.linkedin_url or ""
+                            stats["total_contacts"] += 1
+                            if contact.email:
+                                stats["with_email"] += 1
+                            if contact.phone:
+                                stats["with_phone"] += 1
+
+                        contact_count = len(result.contacts)
+                        if contact_count > 0:
+                            progress.update(task, description=f"[green]✓[/green] {brand_name}: {contact_count} contacts")
+                        else:
+                            progress.update(task, description=f"[yellow]○[/yellow] {brand_name}: No contacts")
+
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    error_msg = str(e)
+                    if "credits" in error_msg.lower():
+                        console.print(f"\n  [red]Apollo credits exhausted. Stopping.[/red]")
+                        break
+                    console.print(f"  [red]✗ Error: {brand_name}: {e}[/red]")
+
+                progress.advance(task)
+
+        # Summary
+        console.print()
+        table = Table(title="Apollo Enrichment Results", box=box.SIMPLE)
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+        table.add_row("Leads processed", str(len(df)))
+        table.add_row("LinkedIn company pages", str(stats["companies_found"]))
+        table.add_row("Total contacts", f"[bold]{stats['total_contacts']}[/bold]")
+        table.add_row("  With email", f"[bold cyan]{stats['with_email']}[/bold cyan]")
+        table.add_row("  With phone", str(stats["with_phone"]))
+        console.print(table)
+
+        # Save enriched file
+        output_file = self.output_dir / f"leads_enriched_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        df.to_csv(output_file, index=False)
+
+        console.print(f"\n  [green]✓ Enriched leads saved to {output_file}[/green]")
+        return str(output_file)
+
     async def run(
         self,
         verticals: list[str] = ["health_wellness", "sporting_goods", "apparel"],
@@ -1134,23 +1270,31 @@ class Pipeline:
         else:
             console.print(f"  [dim]⏭ Skipping Stage 3 (E-commerce) - loaded {len(ecommerce_brands)} e-commerce brands from checkpoint[/dim]")
 
-        # Stage 4: Contact enrichment (Apollo or LinkedIn)
-        if start_stage < 4:
-            enriched = await self.stage_4_enrich(ecommerce_brands)
-            checkpoint.enriched = enriched
-            checkpoint.stage = 4
-            self._save_checkpoint(checkpoint)
-            console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
-        else:
-            console.print(f"  [dim]⏭ Skipping Stage 4 (LinkedIn) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
+        # Stage 4: Contact enrichment (Apollo or LinkedIn) — skip if disabled
+        if settings.enrichment.enabled:
+            if start_stage < 4:
+                enriched = await self.stage_4_enrich(ecommerce_brands)
+                checkpoint.enriched = enriched
+                checkpoint.stage = 4
+                self._save_checkpoint(checkpoint)
+                console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
+            else:
+                console.print(f"  [dim]⏭ Skipping Stage 4 (Enrichment) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
 
-        # Stage 4b: Quality gate
-        if start_stage < 4.5:
-            enriched = await self.stage_4b_quality_gate(enriched)
+            # Stage 4b: Quality gate
+            if start_stage < 4.5:
+                enriched = await self.stage_4b_quality_gate(enriched)
+                checkpoint.enriched = enriched
+                checkpoint.stage = 4.5
+                self._save_checkpoint(checkpoint)
+                console.print(f"  [dim]💾 Checkpoint saved (Stage 4b complete)[/dim]")
+        else:
+            # Skip enrichment — convert brands to export format directly
+            console.print(f"\n  [dim]⏭ Skipping Stage 4 & 4b (Enrichment disabled)[/dim]")
+            enriched = self._brands_to_leads(ecommerce_brands)
             checkpoint.enriched = enriched
             checkpoint.stage = 4.5
             self._save_checkpoint(checkpoint)
-            console.print(f"  [dim]💾 Checkpoint saved (Stage 4b complete)[/dim]")
 
         # Stage 5: Score leads
         scored = self.stage_5_score(enriched)

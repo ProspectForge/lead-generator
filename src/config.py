@@ -43,7 +43,8 @@ class OutreachSettings:
 @dataclass
 class Settings:
     google_places_api_key: str = ""
-    firecrawl_api_key: str = ""
+    firecrawl_api_key: str = ""  # Legacy, no longer used
+    flaresolverr_url: str = ""
     openai_api_key: str = ""
     apollo_api_key: str = ""
     anthropic_api_key: str = ""
@@ -65,6 +66,7 @@ class Settings:
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
+        self.flaresolverr_url = os.getenv("FLARESOLVERR_URL", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.apollo_api_key = os.getenv("APOLLO_API_KEY", "")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")

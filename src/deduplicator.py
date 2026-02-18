@@ -47,31 +47,79 @@ class Deduplicator:
                 name = name[:-len(suffix)]
         return name.strip()
 
-    def _create_key(self, place: dict) -> str:
-        """Create a deduplication key for a place."""
+    def _normalize_address(self, address: str) -> str:
+        """Normalize address for dedup comparison.
+
+        Standardizes street suffixes and removes suite/unit so that
+        '123 Main St' and '123 Main Street' produce the same key,
+        while '123 Main St' and '456 Broadway' remain distinct.
+        """
+        addr = address.lower().strip()
+        # Remove suite/unit/apt numbers
+        addr = re.sub(r'\b(suite|ste|unit|apt|#)\s*\w+', '', addr)
+        # Normalize common street suffixes to canonical form
+        suffix_map = {
+            r'\bstreet\b': 'st', r'\bavenue\b': 'ave', r'\bboulevard\b': 'blvd',
+            r'\bdrive\b': 'dr', r'\blane\b': 'ln', r'\broad\b': 'rd',
+            r'\bcourt\b': 'ct', r'\bplace\b': 'pl', r'\bparkway\b': 'pkwy',
+            r'\bcircle\b': 'cir', r'\bhighway\b': 'hwy', r'\bterrace\b': 'ter',
+        }
+        for pattern, replacement in suffix_map.items():
+            addr = re.sub(pattern, replacement, addr)
+        addr = re.sub(r'\s+', ' ', addr).strip()
+        return addr
+
+    def _brand_key(self, place: dict) -> str:
+        """Create a brand+city key (without address) for initial grouping."""
         domain = self._normalize_domain(place.get("website", ""))
         city = place.get("city", "").lower().strip()
-
         if domain and city:
             return f"{domain}|{city}"
-
-        # Fallback to normalized name + city
         name = self._normalize_name(place.get("name", ""))
         return f"{name}|{city}"
 
     def deduplicate(self, places: list[dict]) -> list[MergedPlace]:
-        """Deduplicate and merge places from multiple sources."""
-        grouped: dict[str, list[dict]] = {}
+        """Deduplicate and merge places from multiple sources.
 
+        Groups by brand+city first, then splits by address within each
+        group so that multiple physical locations in the same city are
+        preserved while true duplicates (same address or missing address)
+        are merged.
+        """
+        # Phase 1: group by brand + city
+        brand_city_groups: dict[str, list[dict]] = {}
         for place in places:
-            key = self._create_key(place)
-            if key not in grouped:
-                grouped[key] = []
-            grouped[key].append(place)
+            key = self._brand_key(place)
+            if key not in brand_city_groups:
+                brand_city_groups[key] = []
+            brand_city_groups[key].append(place)
 
         merged = []
-        for key, group in grouped.items():
-            merged.append(self._merge_group(group))
+        for _key, group in brand_city_groups.items():
+            # Phase 2: within each brand+city group, sub-group by address
+            addr_groups: dict[str, list[dict]] = {}
+            no_addr: list[dict] = []
+
+            for place in group:
+                addr = self._normalize_address(place.get("address", ""))
+                if addr:
+                    if addr not in addr_groups:
+                        addr_groups[addr] = []
+                    addr_groups[addr].append(place)
+                else:
+                    no_addr.append(place)
+
+            if addr_groups:
+                # Merge no-address entries into the first address group
+                # (they're likely the same location from a source lacking address data)
+                first_key = next(iter(addr_groups))
+                addr_groups[first_key].extend(no_addr)
+
+                for addr_group in addr_groups.values():
+                    merged.append(self._merge_group(addr_group))
+            else:
+                # All entries lack addresses — merge them all
+                merged.append(self._merge_group(no_addr))
 
         return merged
 

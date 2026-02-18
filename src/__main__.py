@@ -98,6 +98,10 @@ def interactive_main_menu():
             "value": "results"
         })
         menu_choices.append({
+            "name": "🔍 Enrich leads with Apollo",
+            "value": "enrich"
+        })
+        menu_choices.append({
             "name": "📈 Show statistics",
             "value": "stats"
         })
@@ -144,6 +148,11 @@ def interactive_main_menu():
 
         elif action == "results":
             _interactive_results()
+            nav.clear()
+            nav.push("main")
+
+        elif action == "enrich":
+            _interactive_enrich()
             nav.clear()
             nav.push("main")
 
@@ -962,6 +971,16 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
         # Navigation options
         nav_choices = []
 
+        # Apollo enrichment option
+        has_contacts = any(
+            pd.notna(row.get(f"contact_{j}_name")) and str(row.get(f"contact_{j}_name")).strip()
+            for j in range(1, 5)
+        )
+        if has_contacts:
+            nav_choices.append({"name": "🔄 Re-enrich with Apollo", "value": "apollo"})
+        else:
+            nav_choices.append({"name": "🚀 Enrich with Apollo", "value": "apollo"})
+
         # Outreach generation option
         brand_name = str(row.get("brand_name", "Unknown"))
         outreach_gen = OutreachGenerator()
@@ -989,6 +1008,8 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
 
         if action == "back":
             return current_idx
+        elif action == "apollo":
+            _enrich_single_lead(df, current_idx)
         elif action == "outreach":
             _outreach_flow(row)
         elif action == "prev" and current_idx > 0:
@@ -1003,6 +1024,77 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
                 default=current_idx + 1,
             ).execute()
             current_idx = int(jump_to) - 1
+
+
+def _enrich_single_lead(df, row_idx: int):
+    """Enrich a single lead with Apollo and update the DataFrame in-place."""
+    import pandas as pd
+    from src.apollo_enrich import ApolloEnricher
+
+    row = df.iloc[row_idx]
+    brand_name = str(row.get("brand_name", "Unknown"))
+    website = str(row.get("website", ""))
+
+    if not website or website == "nan":
+        console.print("\n[yellow]No website for this lead — cannot enrich.[/yellow]")
+        return
+
+    if not settings.apollo_api_key:
+        console.print("\n[red]APOLLO_API_KEY not set in .env[/red]")
+        console.print("[dim]Get your key at: https://app.apollo.io/[/dim]")
+        return
+
+    console.print(f"\n[cyan]Enriching {brand_name}...[/cyan]")
+
+    async def _do_enrich():
+        enricher = ApolloEnricher(api_key=settings.apollo_api_key)
+        return await enricher.enrich(brand_name, website, max_contacts=4)
+
+    try:
+        result = asyncio.get_event_loop().run_until_complete(_do_enrich())
+    except RuntimeError:
+        result = asyncio.run(_do_enrich())
+
+    if not result:
+        console.print("[yellow]No data found on Apollo for this company.[/yellow]")
+        return
+
+    # Ensure contact columns exist as string type (pandas may infer them as numeric)
+    contact_cols = []
+    for i in range(1, 5):
+        for suffix in ("name", "title", "email", "phone", "linkedin"):
+            contact_cols.append(f"contact_{i}_{suffix}")
+    for col in contact_cols + ["linkedin_company", "industry"]:
+        if col not in df.columns:
+            df[col] = ""
+        else:
+            df[col] = df[col].astype(object)
+
+    # Update DataFrame in-place
+    idx = df.index[row_idx]
+    if result.company.linkedin_url:
+        df.at[idx, "linkedin_company"] = result.company.linkedin_url
+    if result.company.industry:
+        df.at[idx, "industry"] = result.company.industry
+    if result.company.employee_count:
+        df.at[idx, "employee_count"] = result.company.employee_count
+
+    contact_count = 0
+    email_count = 0
+    for i, contact in enumerate(result.contacts[:4], 1):
+        df.at[idx, f"contact_{i}_name"] = contact.name
+        df.at[idx, f"contact_{i}_title"] = contact.title
+        df.at[idx, f"contact_{i}_email"] = contact.email or ""
+        df.at[idx, f"contact_{i}_phone"] = contact.phone or ""
+        df.at[idx, f"contact_{i}_linkedin"] = contact.linkedin_url or ""
+        contact_count += 1
+        if contact.email:
+            email_count += 1
+
+    if contact_count > 0:
+        console.print(f"[green]✓ Found {contact_count} contacts ({email_count} with email)[/green]")
+    else:
+        console.print("[yellow]Company found but no contacts matched target titles.[/yellow]")
 
 
 def _outreach_flow(lead_row):
@@ -1169,6 +1261,104 @@ def _display_outreach_messages(messages: dict[str, str], brand_name: str):
                 padding=(1, 2),
             ))
             console.print()
+
+
+def _interactive_enrich():
+    """Enrich existing leads CSV with Apollo contact data."""
+    import pandas as pd
+
+    nav.push("enrich")
+
+    # Check API key first
+    if not settings.apollo_api_key:
+        console.print()
+        console.print(Panel(
+            "[bold red]APOLLO_API_KEY not set[/bold red]\n\n"
+            "To enrich leads with contacts, set APOLLO_API_KEY in your .env file.\n"
+            "Get your key at: [link]https://app.apollo.io/[/link]",
+            title="API Key Required",
+            border_style="red",
+        ))
+        nav.pop()
+        return
+
+    # Find CSV files
+    output_dirs = [Path("output"), Path("data/output")]
+    csv_files = []
+    for output_dir in output_dirs:
+        csv_files.extend(output_dir.glob("leads_*.csv"))
+
+    if not csv_files:
+        console.print("[yellow]No leads files found. Run the pipeline first.[/yellow]")
+        nav.pop()
+        return
+
+    csv_files = sorted(csv_files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    # Select file
+    file_choices = [
+        {"name": f"{p.name} ({format_timestamp(datetime.fromtimestamp(p.stat().st_mtime).isoformat())})", "value": p}
+        for p in csv_files[:10]
+    ]
+    file_choices.append({"name": "← Back", "value": "back"})
+
+    console.print()
+    selected = inquirer.select(
+        message="Select leads file to enrich:",
+        choices=file_choices,
+    ).execute()
+
+    if selected == "back":
+        nav.pop()
+        return
+
+    csv_path = selected
+
+    # Show preview
+    try:
+        df = pd.read_csv(csv_path)
+        has_contacts = any(
+            df.get(f"contact_1_name", pd.Series()).notna().any()
+            for _ in [1]
+            if f"contact_1_name" in df.columns
+        )
+
+        console.print(f"\n  [bold]File:[/bold] {csv_path.name}")
+        console.print(f"  [bold]Leads:[/bold] {len(df)}")
+        if has_contacts:
+            console.print(f"  [yellow]Note: This file already has some contact data. Existing contacts will be updated.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error reading file: {e}[/red]")
+        nav.pop()
+        return
+
+    # Confirm
+    confirm = inquirer.confirm(
+        message=f"Enrich {len(df)} leads with Apollo? (uses API credits)",
+        default=True,
+    ).execute()
+
+    if not confirm:
+        nav.pop()
+        return
+
+    console.print()
+    console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
+
+    try:
+        pipeline = Pipeline()
+        output_file = asyncio.run(pipeline.enrich_csv(str(csv_path)))
+        console.print()
+        console.print(Panel(
+            f"[bold green]Enrichment complete![/bold green]\n\n"
+            f"Output saved to:\n[cyan]{output_file}[/cyan]",
+            title="Success",
+            border_style="green",
+        ))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Enrichment interrupted.[/yellow]")
+    finally:
+        nav.pop()
 
 
 def _interactive_stats():
@@ -1779,6 +1969,63 @@ def search(
         console.print(f"\n[green]✓ Found {len(results)} places[/green]")
     except KeyboardInterrupt:
         console.print("\n[yellow]Search interrupted.[/yellow]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def enrich(
+    file: str = typer.Argument(None, help="CSV file to enrich (or picks latest)"),
+    max_contacts: int = typer.Option(4, "--max-contacts", "-n", help="Maximum contacts per company"),
+):
+    """Enrich an existing leads CSV with Apollo contact data."""
+    show_banner()
+
+    if not settings.apollo_api_key:
+        console.print("[red]APOLLO_API_KEY not set in .env[/red]")
+        console.print("[dim]Get your key at: https://app.apollo.io/[/dim]")
+        raise typer.Exit(1)
+
+    # Find file
+    output_dirs = [Path("output"), Path("data/output")]
+
+    if file:
+        csv_path = Path(file)
+        if not csv_path.exists():
+            for output_dir in output_dirs:
+                if (output_dir / file).exists():
+                    csv_path = output_dir / file
+                    break
+    else:
+        csv_files = []
+        for output_dir in output_dirs:
+            csv_files.extend(output_dir.glob("leads_*.csv"))
+
+        if not csv_files:
+            console.print("[yellow]No leads files found. Run the pipeline first.[/yellow]")
+            raise typer.Exit(1)
+
+        csv_files = sorted(csv_files, key=lambda p: p.stat().st_mtime, reverse=True)
+        csv_path = csv_files[0]
+
+    if not csv_path.exists():
+        console.print(f"[red]File not found: {csv_path}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Enriching: {csv_path}[/dim]")
+    console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
+
+    try:
+        pipeline = Pipeline()
+        output_file = asyncio.run(pipeline.enrich_csv(str(csv_path), max_contacts))
+        console.print()
+        console.print(Panel(
+            f"[bold green]Enrichment complete![/bold green]\n\n"
+            f"Output saved to:\n[cyan]{output_file}[/cyan]",
+            title="Success",
+            border_style="green",
+        ))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Enrichment interrupted.[/yellow]")
         raise typer.Exit(1)
 
 

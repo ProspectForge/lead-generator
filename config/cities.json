@@ -1142,11 +1142,11 @@
     "max_cities": 20
   },
   "ecommerce": {
-    "concurrency": 5,
+    "concurrency": 10,
     "pages_to_check": 3
   },
   "search": {
-    "concurrency": 5
+    "concurrency": 10
   },
   "llm": {
     "enabled": true,
@@ -1168,6 +1168,6 @@
     "max_employees": 500
   },
   "health_check": {
-    "concurrency": 10
+    "concurrency": 50
   }
 }

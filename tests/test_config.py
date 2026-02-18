@@ -36,4 +36,4 @@ def test_settings_loads_quality_gate_config():
 def test_settings_loads_health_check_config():
     settings = Settings()
 
-    assert settings.health_check_concurrency == 10
+    assert settings.health_check_concurrency == 50

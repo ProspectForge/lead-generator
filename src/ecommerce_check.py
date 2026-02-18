@@ -18,11 +18,12 @@ class EcommerceResult:
     marketplace_links: dict[str, str] = field(default_factory=dict)
     priority: str = "medium"  # "high" if marketplaces, "medium" otherwise
     crawl_failed: bool = False  # True when fetching failed entirely
+    fail_reason: Optional[str] = None  # Why the fetch failed
 
 class EcommerceChecker:
     DEFAULT_PAGES_TO_CHECK = 3
-    MAX_RETRIES = 2
-    RETRY_DELAYS = [1, 2]
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [1, 2, 4]
     REQUEST_TIMEOUT = 15.0
 
     # Common shop page paths to probe after the homepage
@@ -131,8 +132,8 @@ class EcommerceChecker:
     def __init__(self, pages_to_check: int = None, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
 
-    async def _fetch_page(self, url: str, client: httpx.AsyncClient) -> Optional[str]:
-        """Fetch a single page's HTML with retries."""
+    async def _fetch_page(self, url: str, client: httpx.AsyncClient) -> tuple[Optional[str], Optional[str]]:
+        """Fetch a single page's HTML with retries. Returns (html, error_reason)."""
         for attempt in range(self.MAX_RETRIES):
             try:
                 response = await client.get(
@@ -140,36 +141,48 @@ class EcommerceChecker:
                     follow_redirects=True,
                     headers={"User-Agent": self.USER_AGENT},
                 )
+                # Retry on rate limit with exponential backoff
+                if response.status_code == 429:
+                    if attempt < self.MAX_RETRIES - 1:
+                        retry_after = int(response.headers.get("Retry-After", self.RETRY_DELAYS[attempt] * 2))
+                        await asyncio.sleep(min(retry_after, 10))
+                        continue
+                    return None, "HTTP 429"
                 if response.status_code >= 400:
-                    return None
-                return response.text
-            except (httpx.TimeoutException, httpx.ConnectError):
+                    return None, f"HTTP {response.status_code}"
+                return response.text, None
+            except httpx.TimeoutException:
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAYS[attempt])
                     continue
-                return None
-            except Exception:
-                return None
-        return None
+                return None, "Timeout"
+            except httpx.ConnectError:
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                    continue
+                return None, "Connection failed"
+            except Exception as e:
+                return None, str(type(e).__name__)
+        return None, "Max retries"
 
-    async def _fetch_site_pages(self, url: str) -> list[str]:
-        """Fetch homepage + shop pages directly via HTTP, return list of HTML contents."""
+    async def _fetch_site_pages(self, url: str) -> tuple[list[str], Optional[str]]:
+        """Fetch homepage + shop pages directly via HTTP. Returns (pages, fail_reason)."""
         async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT) as client:
             # Always fetch homepage first
-            homepage = await self._fetch_page(url, client)
+            homepage, fail_reason = await self._fetch_page(url, client)
             if not homepage:
-                return []
+                return [], fail_reason
 
             pages = [homepage]
 
             # If we already detect a platform from the homepage, skip probing extra pages
             if self._detect_platform(homepage):
-                return pages
+                return pages, None
 
             # Probe common shop paths for additional signals
             pages_needed = self.pages_to_check - 1
             if pages_needed <= 0:
-                return pages
+                return pages, None
 
             # Also look for shop links in the homepage HTML
             discovered_paths = self._find_shop_links(homepage, url)
@@ -179,13 +192,13 @@ class EcommerceChecker:
 
             for path in paths_to_try[:pages_needed * 2]:  # Try more paths than needed
                 page_url = urljoin(url + "/", path.lstrip("/"))
-                html = await self._fetch_page(page_url, client)
+                html, _ = await self._fetch_page(page_url, client)
                 if html and len(html) > 500:  # Skip trivial error pages
                     pages.append(html)
                     if len(pages) >= self.pages_to_check:
                         break
 
-            return pages
+            return pages, None
 
     def _find_shop_links(self, html: str, base_url: str) -> list[str]:
         """Extract likely shop/product page paths from homepage HTML."""
@@ -282,7 +295,7 @@ class EcommerceChecker:
         base_url = url.rstrip('/')
 
         # Fetch pages directly via HTTP
-        page_contents = await self._fetch_site_pages(base_url)
+        page_contents, fail_reason = await self._fetch_site_pages(base_url)
 
         if not page_contents:
             return EcommerceResult(
@@ -296,6 +309,7 @@ class EcommerceChecker:
                 marketplace_links={},
                 priority="medium",
                 crawl_failed=True,
+                fail_reason=fail_reason,
             )
 
         all_indicators = []
