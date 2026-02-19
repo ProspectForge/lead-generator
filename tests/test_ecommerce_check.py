@@ -180,6 +180,23 @@ async def test_crawl_failure_sets_flag():
         assert result.pages_checked == 0
 
 
+@pytest.mark.parametrize("platform,html_snippet", [
+    ("wix", '<script src="https://static.wixstatic.com/something.js"></script>'),
+    ("ecwid", '<script src="https://app.ecwid.com/script.js"></script>'),
+    ("volusion", '<link href="/v/vspfiles/templates/style.css">'),
+    ("shift4shop", '<script src="https://cdn.3dcart.com/js/main.js"></script>'),
+    ("opencart", '<a href="index.php?route=product/category">Shop</a>'),
+    ("salesforce_commerce", '<script src="https://example.demandware.net/script.js"></script>'),
+    ("sap_commerce", '<link href="/yacceleratorstorefront/style.css">'),
+    ("snipcart", '<button class="snipcart-add-item" data-item-id="prod1">Buy</button>'),
+])
+def test_detect_new_platforms(platform, html_snippet):
+    """Should detect new e-commerce platforms from HTML signatures."""
+    checker = EcommerceChecker()
+    detected = checker._detect_platform(html_snippet)
+    assert detected == platform, f"Expected {platform}, got {detected}"
+
+
 def test_find_shop_links():
     """Should extract shop/product page links from HTML."""
     checker = EcommerceChecker()

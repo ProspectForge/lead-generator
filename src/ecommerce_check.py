@@ -43,6 +43,7 @@ class EcommerceChecker:
 
     # E-commerce platform signatures (high confidence)
     PLATFORM_SIGNATURES = {
+        # Existing platforms
         "shopify": [r'cdn\.shopify\.com', r'myshopify\.com', r'shopify-assets'],
         "woocommerce": [r'wp-content/plugins/woocommerce', r'woocommerce', r'wc-add-to-cart', r'wp-json/wc/'],
         "bigcommerce": [r'bigcommerce\.com', r'cdn\.bc'],
@@ -50,6 +51,15 @@ class EcommerceChecker:
         "magento": [r'Mage\.Cookies', r'mage/cookies', r'/static/version\d+/', r'Magento_Ui', r'magento-init', r'data-mage-init', r'varien/js'],
         "shopware": [r'shopware'],
         "prestashop": [r'prestashop'],
+        # New platforms
+        "wix": [r'wixsite\.com', r'static\.wixstatic\.com', r'wix-ecommerce', r'_api/wix-ecommerce'],
+        "ecwid": [r'ecwid\.com', r'app\.ecwid\.com', r'Ecwid\.Cart'],
+        "volusion": [r'volusion\.com', r'stor\.vo\.llnwd\.net', r'/v/vspfiles/'],
+        "shift4shop": [r'shift4shop\.com', r'3dcart\.com', r'3dcartstores\.com'],
+        "opencart": [r'route=product', r'route=checkout'],
+        "salesforce_commerce": [r'demandware\.net', r'demandware\.static', r'dw/shop/v'],
+        "sap_commerce": [r'/yacceleratorstorefront/'],
+        "snipcart": [r'snipcart\.com', r'snipcart-add-item', r'class="snipcart-'],
     }
 
     # E-commerce action patterns (use explicit separators, not regex wildcards)
