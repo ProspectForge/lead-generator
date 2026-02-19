@@ -1,5 +1,6 @@
 # tests/test_ecommerce_check.py
 import pytest
+import httpx
 from unittest.mock import AsyncMock, patch
 from src.ecommerce_check import EcommerceChecker, EcommerceResult
 
@@ -34,7 +35,7 @@ async def test_detects_ecommerce_site(ecommerce_page_content):
     checker = EcommerceChecker()
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([ecommerce_page_content], None)
+        mock_fetch.return_value = ([ecommerce_page_content], None, [])
 
         result = await checker.check("https://example.com")
 
@@ -46,7 +47,7 @@ async def test_detects_non_ecommerce_site(non_ecommerce_page_content):
     checker = EcommerceChecker()
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([non_ecommerce_page_content], None)
+        mock_fetch.return_value = ([non_ecommerce_page_content], None, [])
 
         result = await checker.check("https://example.com")
 
@@ -140,7 +141,7 @@ async def test_check_returns_marketplace_data(ecommerce_with_marketplace_content
     checker = EcommerceChecker()
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([ecommerce_with_marketplace_content], None)
+        mock_fetch.return_value = ([ecommerce_with_marketplace_content], None, [])
 
         result = await checker.check("https://example.com")
 
@@ -155,7 +156,7 @@ async def test_check_returns_medium_priority_without_marketplace(ecommerce_page_
     checker = EcommerceChecker()
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([ecommerce_page_content], None)
+        mock_fetch.return_value = ([ecommerce_page_content], None, [])
 
         result = await checker.check("https://example.com")
 
@@ -170,7 +171,7 @@ async def test_crawl_failure_sets_flag():
     checker = EcommerceChecker()
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([], "Connection failed")
+        mock_fetch.return_value = ([], "Connection failed", [])
 
         result = await checker.check("https://dead-site.com")
 
@@ -216,3 +217,19 @@ def test_find_shop_links():
     assert "/collections/all" in paths
     # External links should be excluded
     assert not any("other-domain" in p for p in paths)
+
+
+@pytest.mark.asyncio
+async def test_fetch_site_pages_returns_headers():
+    """_fetch_site_pages should return page headers alongside HTML."""
+    checker = EcommerceChecker()
+
+    mock_headers = httpx.Headers({"x-powered-by": "Shopify", "content-type": "text/html"})
+
+    with patch.object(checker, '_fetch_page', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = ("<html><body>Shop</body></html>", None, mock_headers)
+        pages, fail_reason, all_headers = await checker._fetch_site_pages("https://example.com")
+
+    assert len(pages) == 1
+    assert len(all_headers) == 1
+    assert all_headers[0].get("x-powered-by") == "Shopify"

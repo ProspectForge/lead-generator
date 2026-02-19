@@ -145,8 +145,8 @@ class EcommerceChecker:
     def __init__(self, pages_to_check: int = None, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
 
-    async def _fetch_page(self, url: str, client: httpx.AsyncClient) -> tuple[Optional[str], Optional[str]]:
-        """Fetch a single page's HTML with retries. Returns (html, error_reason)."""
+    async def _fetch_page(self, url: str, client: httpx.AsyncClient) -> tuple[Optional[str], Optional[str], Optional[httpx.Headers]]:
+        """Fetch a single page's HTML with retries. Returns (html, error_reason, headers)."""
         for attempt in range(self.MAX_RETRIES):
             try:
                 ua = random.choice(self.USER_AGENTS)
@@ -171,42 +171,45 @@ class EcommerceChecker:
                         jitter = random.uniform(0.5, 2.0)
                         await asyncio.sleep(delay + jitter)
                         continue
-                    return None, "HTTP 429"
+                    return None, "HTTP 429", None
                 if response.status_code >= 400:
-                    return None, f"HTTP {response.status_code}"
-                return response.text, None
+                    return None, f"HTTP {response.status_code}", None
+                return response.text, None, response.headers
             except httpx.TimeoutException:
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAYS[attempt])
                     continue
-                return None, "Timeout"
+                return None, "Timeout", None
             except httpx.ConnectError:
                 if attempt < self.MAX_RETRIES - 1:
                     await asyncio.sleep(self.RETRY_DELAYS[attempt])
                     continue
-                return None, "Connection failed"
+                return None, "Connection failed", None
             except Exception as e:
-                return None, str(type(e).__name__)
-        return None, "Max retries"
+                return None, str(type(e).__name__), None
+        return None, "Max retries", None
 
-    async def _fetch_site_pages(self, url: str) -> tuple[list[str], Optional[str]]:
-        """Fetch homepage + shop pages directly via HTTP. Returns (pages, fail_reason)."""
+    async def _fetch_site_pages(self, url: str) -> tuple[list[str], Optional[str], list[httpx.Headers]]:
+        """Fetch homepage + shop pages directly via HTTP. Returns (pages, fail_reason, all_headers)."""
+        all_headers = []
         async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT) as client:
             # Always fetch homepage first
-            homepage, fail_reason = await self._fetch_page(url, client)
+            homepage, fail_reason, headers = await self._fetch_page(url, client)
             if not homepage:
-                return [], fail_reason
+                return [], fail_reason, []
 
             pages = [homepage]
+            if headers:
+                all_headers.append(headers)
 
             # If we already detect a platform from the homepage, skip probing extra pages
             if self._detect_platform(homepage):
-                return pages, None
+                return pages, None, all_headers
 
             # Probe common shop paths for additional signals
             pages_needed = self.pages_to_check - 1
             if pages_needed <= 0:
-                return pages, None
+                return pages, None, all_headers
 
             # Also look for shop links in the homepage HTML
             discovered_paths = self._find_shop_links(homepage, url)
@@ -216,13 +219,15 @@ class EcommerceChecker:
 
             for path in paths_to_try[:pages_needed * 2]:  # Try more paths than needed
                 page_url = urljoin(url + "/", path.lstrip("/"))
-                html, _ = await self._fetch_page(page_url, client)
+                html, _, page_headers = await self._fetch_page(page_url, client)
                 if html and len(html) > 500:  # Skip trivial error pages
                     pages.append(html)
+                    if page_headers:
+                        all_headers.append(page_headers)
                     if len(pages) >= self.pages_to_check:
                         break
 
-            return pages, None
+            return pages, None, all_headers
 
     def _find_shop_links(self, html: str, base_url: str) -> list[str]:
         """Extract likely shop/product page paths from homepage HTML."""
@@ -319,7 +324,7 @@ class EcommerceChecker:
         base_url = url.rstrip('/')
 
         # Fetch pages directly via HTTP
-        page_contents, fail_reason = await self._fetch_site_pages(base_url)
+        page_contents, fail_reason, page_headers = await self._fetch_site_pages(base_url)
 
         if not page_contents:
             return EcommerceResult(
