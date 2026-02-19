@@ -5,7 +5,7 @@ import httpx
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
-from src.places_search import PlacesSearcher
+from src.serpapi_search import SerpApiSearcher
 from src.geocoder import CityGeocoder
 from src.brand_expander import BrandExpander
 from src.deduplicator import Deduplicator, MergedPlace
@@ -36,8 +36,9 @@ class Discovery:
 
     def __init__(self, settings):
         self.settings = settings
-        self.searcher = PlacesSearcher(api_key=settings.google_places_api_key)
-        self.expander = BrandExpander(api_key=settings.google_places_api_key)
+        self.searcher = SerpApiSearcher(api_key=settings.serpapi_api_key)
+        self.geocoder = CityGeocoder()
+        self.expander = BrandExpander(api_key=settings.serpapi_api_key)
         self.deduplicator = Deduplicator()
         self.bestof_scraper = BestOfScraper(firecrawl_api_key=settings.firecrawl_api_key)
 
@@ -49,17 +50,20 @@ class Discovery:
         """Run full discovery pipeline."""
         all_places = []
 
-        # Stage 1: Google Places search
-        console.print("[bold cyan]Discovery Stage 1:[/bold cyan] Google Places Search")
-        gp_results = await self._run_google_places(verticals, countries)
+        # Stage 1: SerpAPI Google Maps search
+        console.print("[bold cyan]Discovery Stage 1:[/bold cyan] Google Maps Search (SerpAPI)")
+        gp_results = await self._run_search(verticals, countries)
         all_places.extend(gp_results)
-        console.print(f"  [green]Found {len(gp_results)} places from Google[/green]")
+        console.print(f"  [green]Found {len(gp_results)} places from search[/green]")
 
-        # Stage 1b: Nearby grid search
-        console.print("[bold cyan]Discovery Stage 1b:[/bold cyan] Nearby Grid Search")
-        grid_results = await self._run_nearby_grid_search(verticals, countries)
-        all_places.extend(grid_results)
-        console.print(f"  [green]Found {len(grid_results)} places from grid search[/green]")
+        # Stage 1b: Nearby grid search (extended mode only)
+        if getattr(self.settings, 'search_mode', 'extended') == "extended":
+            console.print("[bold cyan]Discovery Stage 1b:[/bold cyan] Nearby Grid Search")
+            grid_results = await self._run_nearby_grid_search(verticals, countries)
+            all_places.extend(grid_results)
+            console.print(f"  [green]Found {len(grid_results)} places from grid search[/green]")
+        else:
+            console.print("  [dim]Skipping grid search (lean mode)[/dim]")
 
         # Stage 2: Web scraping
         console.print("[bold cyan]Discovery Stage 2:[/bold cyan] Web Scraping")
@@ -93,27 +97,29 @@ class Discovery:
         }
 
     def _build_city_list(self, countries: list[str]) -> list[str]:
-        """Build list of cities from the given countries."""
+        """Build list of cities based on current search mode."""
+        mode_cities = self.settings.get_cities_for_mode()
         cities = []
         for country in countries:
-            cities.extend(self.settings.cities.get(country, []))
+            cities.extend(mode_cities.get(country, []))
         return cities
 
-    async def _run_google_places(
+    async def _run_search(
         self,
         verticals: list[str],
         countries: list[str]
     ) -> list[dict]:
-        """Run enhanced Google Places searches."""
+        """Run SerpAPI Google Maps searches."""
         results = []
         semaphore = asyncio.Semaphore(self.settings.search_concurrency)
 
         cities = self._build_city_list(countries)
 
         # Build search tasks
+        queries = self.settings.get_queries_for_mode()
         tasks = []
         for vertical in verticals:
-            for query in self.settings.search_queries.get(vertical, []):
+            for query in queries.get(vertical, []):
                 for city in cities:
                     tasks.append((city, query, vertical))
 
@@ -129,13 +135,13 @@ class Discovery:
                             "place_id": p.place_id,
                             "city": p.city,
                             "vertical": p.vertical,
-                            "source": "google_places"
+                            "source": "serpapi"
                         }
                         for p in places
                     ]
                 except Exception as e:
                     if not _is_transient_error(e):
-                        logger.warning("Google Places search failed for %s in %s: %s", query, city, e)
+                        logger.warning("SerpAPI search failed for %s in %s: %s", query, city, e)
                     return []
 
         with Progress(
@@ -171,9 +177,8 @@ class Discovery:
         semaphore = asyncio.Semaphore(self.settings.search_concurrency)
         cities = self._build_city_list(countries)
 
-        # Geocode all cities
-        geocoder = CityGeocoder(api_key=self.settings.google_places_api_key)
-        city_coords = await geocoder.geocode_batch(cities)
+        # Geocode all cities (uses Nominatim — free)
+        city_coords = await self.geocoder.geocode_batch(cities)
 
         if not city_coords:
             console.print("  [yellow]No city coordinates available, skipping grid search[/yellow]")
@@ -186,10 +191,10 @@ class Discovery:
         # Build search tasks: (lat, lng, types, vertical, city)
         tasks = []
         for city, (lat, lng) in city_coords.items():
-            grid_points = PlacesSearcher.generate_grid_points(lat, lng, offset_km, grid_mode)
+            grid_points = SerpApiSearcher.generate_grid_points(lat, lng, offset_km, grid_mode)
             for point_lat, point_lng in grid_points:
                 for vertical in verticals:
-                    types = PlacesSearcher.RETAIL_TYPES.get(vertical, [])
+                    types = SerpApiSearcher.RETAIL_TYPES.get(vertical, [])
                     if types:
                         tasks.append((point_lat, point_lng, types, vertical, city))
 
@@ -257,8 +262,9 @@ class Discovery:
 
         # Build scraping tasks
         scrape_tasks = []
+        mode_queries = self.settings.get_queries_for_mode()
         for vertical in verticals:
-            queries = self.settings.search_queries.get(vertical, [])
+            queries = mode_queries.get(vertical, [])
             if not queries:
                 continue
             query = queries[0]  # Use first query as representative
@@ -302,10 +308,8 @@ class Discovery:
         places: list[dict],
         countries: list[str]
     ) -> list[dict]:
-        """Expand promising brands to all cities."""
+        """Expand promising brands by scraping their websites for location pages."""
         results = []
-
-        all_cities = self._build_city_list(countries)
 
         # Group by website domain to find multi-location brands
         from collections import defaultdict
@@ -331,16 +335,14 @@ class Discovery:
                     "name": domain_places[0]["name"],
                     "website": domain_places[0]["website"],
                     "vertical": domain_places[0]["vertical"],
-                    "cities_found": cities_found
                 })
 
         brands_to_process = brands_to_expand[:BRANDS_TO_EXPAND_LIMIT]
-        console.print(f"  [dim]Expanding {len(brands_to_process)} promising brands...[/dim]")
+        console.print(f"  [dim]Expanding {len(brands_to_process)} promising brands via website scraping...[/dim]")
 
         if not brands_to_process:
             return results
 
-        # Expand each brand with progress indicator
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -348,20 +350,16 @@ class Discovery:
             TaskProgressColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task(f"[cyan]Expanding {len(brands_to_process)} brands...", total=len(brands_to_process))
+            task = progress.add_task(f"[cyan]Scraping {len(brands_to_process)} brand websites...", total=len(brands_to_process))
 
             for brand in brands_to_process:
-                progress.update(task, description=f"[cyan]Expanding[/cyan] {brand['name']}")
-
-                # Only search cities we haven't already found
-                cities_to_search = [c for c in all_cities if c not in brand["cities_found"]]
+                progress.update(task, description=f"[cyan]Scraping[/cyan] {brand['name']}")
 
                 try:
                     expanded = await self.expander.expand_brand(
                         brand_name=brand["name"],
                         known_website=brand["website"],
-                        cities=cities_to_search,
-                        vertical=brand["vertical"]
+                        vertical=brand["vertical"],
                     )
                     results.extend(expanded)
                 except Exception as e:
