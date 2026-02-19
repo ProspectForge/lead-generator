@@ -23,7 +23,7 @@ async def test_full_marketplace_detection_flow():
     """
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([mock_content], None)
+        mock_fetch.return_value = ([mock_content], None, [])
 
         result = await checker.check("https://acmesupplements.com")
 
@@ -59,7 +59,7 @@ async def test_ecommerce_without_marketplace():
     """
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([mock_content], None)
+        mock_fetch.return_value = ([mock_content], None, [])
 
         result = await checker.check("https://localfitness.com")
 
@@ -83,7 +83,7 @@ async def test_detects_walmart_and_etsy():
     """
 
     with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = ([mock_content], None)
+        mock_fetch.return_value = ([mock_content], None, [])
 
         result = await checker.check("https://handmadecrafts.com")
 
