@@ -376,3 +376,36 @@ async def test_playwright_fallback_not_triggered_when_disabled():
         result = await checker.check("https://spa-store.com")
 
         assert result.has_ecommerce is False
+
+
+@pytest.mark.asyncio
+async def test_full_enhanced_ecommerce_detection():
+    """Integration test: platform expansion + headers + meta + JSON-LD all work together."""
+    checker = EcommerceChecker()
+
+    # Page with Wix platform (new), JSON-LD product, and marketplace
+    html = '''<html>
+    <head>
+        <script src="https://static.wixstatic.com/something.js"></script>
+        <meta property="og:type" content="product">
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Widget", "offers": {"@type": "Offer", "price": "29.99"}}
+        </script>
+    </head>
+    <body>
+        <button>Add to Cart</button>
+        <span>$29.99</span>
+        <a href="https://amazon.com/stores/WidgetCo">Amazon Store</a>
+    </body>
+    </html>'''
+
+    mock_headers = httpx.Headers({"content-type": "text/html"})
+
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = ([html], None, [mock_headers])
+        result = await checker.check("https://widgetco.com")
+
+    assert result.has_ecommerce is True
+    assert result.platform == "wix"
+    assert result.confidence >= 0.9
+    assert "amazon" in result.marketplaces

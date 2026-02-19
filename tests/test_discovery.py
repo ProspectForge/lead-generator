@@ -84,3 +84,35 @@ async def test_discovery_deduplicates_results(mock_settings):
 
                     # Should dedupe to 1 result
                     assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_full_flow_with_grid_search(mock_settings):
+    """Integration test: grid search results merge with text search results."""
+    mock_settings.discovery = MagicMock()
+    mock_settings.discovery.nearby_grid_enabled = True
+    mock_settings.discovery.nearby_grid_offset_km = 20
+    mock_settings.discovery.nearby_grid_radius_meters = 15000
+    mock_settings.discovery.nearby_grid_points = "cardinal"
+
+    discovery = Discovery(mock_settings)
+
+    text_results = [
+        {"name": "Downtown Store", "city": "Boston, MA", "website": "https://downtown.com",
+         "place_id": "text1", "vertical": "running", "address": "1 Main St", "source": "google_places"}
+    ]
+    grid_results = [
+        {"name": "Suburb Store", "city": "Cambridge, MA", "website": "https://suburb.com",
+         "place_id": "grid1", "vertical": "running", "address": "2 Suburb Rd", "source": "nearby_grid"}
+    ]
+
+    with patch.object(discovery, '_run_google_places', new_callable=AsyncMock, return_value=text_results):
+        with patch.object(discovery, '_run_nearby_grid_search', new_callable=AsyncMock, return_value=grid_results):
+            with patch.object(discovery, '_run_scraping', new_callable=AsyncMock, return_value=[]):
+                with patch.object(discovery, '_run_brand_expansion', new_callable=AsyncMock, return_value=[]):
+                    results = await discovery.run(verticals=["running"], countries=["us"])
+
+    assert len(results) == 2
+    names = [r["name"] for r in results]
+    assert "Downtown Store" in names
+    assert "Suburb Store" in names
