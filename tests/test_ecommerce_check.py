@@ -250,3 +250,53 @@ def test_detect_platform_from_headers(headers_dict, expected_platform):
     headers = httpx.Headers(headers_dict)
     result = checker._detect_platform_from_headers(headers)
     assert result == expected_platform
+
+
+def test_detect_platform_from_meta_generator():
+    """Should detect platform from meta generator tag."""
+    checker = EcommerceChecker()
+    html = '<html><head><meta name="generator" content="WooCommerce 8.0"></head><body></body></html>'
+    result = checker._detect_from_meta_tags(html)
+    assert result == "woocommerce"
+
+
+def test_detect_platform_from_script_src():
+    """Should detect platform from script CDN URLs."""
+    checker = EcommerceChecker()
+    html = '<html><head><script src="https://cdn.shopify.com/s/files/1/0123/theme.js"></script></head><body></body></html>'
+    result = checker._detect_from_meta_tags(html)
+    assert result == "shopify"
+
+
+def test_detect_product_from_og_type():
+    """Should detect product pages from og:type meta."""
+    checker = EcommerceChecker()
+    html = '<html><head><meta property="og:type" content="product"></head><body></body></html>'
+    result = checker._detect_from_meta_tags(html)
+    assert result == "product_page"
+
+
+def test_detect_ecommerce_from_json_ld_product():
+    """Should detect e-commerce from JSON-LD Product structured data."""
+    checker = EcommerceChecker()
+    html = '''<html><head>
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Running Shoes", "offers": {"@type": "Offer", "price": "99.99"}}
+    </script>
+    </head><body></body></html>'''
+    has_product, has_offer = checker._detect_from_json_ld(html)
+    assert has_product is True
+    assert has_offer is True
+
+
+def test_no_json_ld_product():
+    """Should return False when no Product JSON-LD found."""
+    checker = EcommerceChecker()
+    html = '''<html><head>
+    <script type="application/ld+json">
+    {"@type": "Organization", "name": "Example Corp"}
+    </script>
+    </head><body></body></html>'''
+    has_product, has_offer = checker._detect_from_json_ld(html)
+    assert has_product is False
+    assert has_offer is False

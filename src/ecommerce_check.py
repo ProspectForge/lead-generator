@@ -1,6 +1,7 @@
 # src/ecommerce_check.py
 import asyncio
 import httpx
+import json as json_module
 import random
 from dataclasses import dataclass, field
 from typing import Optional
@@ -162,6 +163,24 @@ class EcommerceChecker:
         },
     }
 
+    # Meta tag and script src detection patterns
+    META_GENERATOR_PLATFORMS = {
+        "woocommerce": [r"woocommerce"],
+        "shopify": [r"shopify"],
+        "prestashop": [r"prestashop"],
+        "magento": [r"magento"],
+        "opencart": [r"opencart"],
+    }
+
+    SCRIPT_SRC_PLATFORMS = {
+        "shopify": [r"cdn\.shopify\.com"],
+        "bigcommerce": [r"cdn\d*\.bigcommerce\.com"],
+        "squarespace": [r"static\d*\.squarespace\.com"],
+        "ecwid": [r"app\.ecwid\.com"],
+        "snipcart": [r"cdn\.snipcart\.com"],
+        "wix": [r"static\.wixstatic\.com"],
+    }
+
     def __init__(self, pages_to_check: int = None, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
 
@@ -288,6 +307,83 @@ class EcommerceChecker:
                             return platform
         return None
 
+    def _detect_from_meta_tags(self, html: str) -> Optional[str]:
+        """Detect platform from meta tags and script src attributes.
+
+        Returns platform name, "product_page" for og:type=product, or None.
+        """
+        # Check meta generator
+        generator_match = re.search(
+            r'<meta\s+name=["\']generator["\']\s+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE
+        )
+        if generator_match:
+            generator = generator_match.group(1).lower()
+            for platform, patterns in self.META_GENERATOR_PLATFORMS.items():
+                for pattern in patterns:
+                    if re.search(pattern, generator):
+                        return platform
+
+        # Check script src attributes
+        script_srcs = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+        for src in script_srcs:
+            for platform, patterns in self.SCRIPT_SRC_PLATFORMS.items():
+                for pattern in patterns:
+                    if re.search(pattern, src, re.IGNORECASE):
+                        return platform
+
+        # Check og:type for product pages
+        og_match = re.search(
+            r'<meta\s+property=["\']og:type["\']\s+content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE
+        )
+        if og_match and og_match.group(1).lower() in ("product", "product.item"):
+            return "product_page"
+
+        return None
+
+    def _detect_from_json_ld(self, html: str) -> tuple[bool, bool]:
+        """Detect Product/Offer structured data from JSON-LD.
+
+        Returns (has_product, has_offer).
+        """
+        has_product = False
+        has_offer = False
+
+        json_ld_blocks = re.findall(
+            r'<script\s+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            html, re.DOTALL | re.IGNORECASE
+        )
+
+        for block in json_ld_blocks:
+            try:
+                data = json_module.loads(block.strip())
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    item_type = item.get("@type", "")
+                    if isinstance(item_type, list):
+                        types = [t.lower() for t in item_type]
+                    else:
+                        types = [item_type.lower()]
+
+                    if "product" in types:
+                        has_product = True
+                    if "offer" in types or "aggregateoffer" in types:
+                        has_offer = True
+
+                    # Check nested offers
+                    offers = item.get("offers", {})
+                    if isinstance(offers, dict):
+                        offer_type = offers.get("@type", "").lower()
+                        if offer_type in ("offer", "aggregateoffer"):
+                            has_offer = True
+                    elif isinstance(offers, list):
+                        has_offer = True
+            except (json_module.JSONDecodeError, AttributeError):
+                continue
+
+        return has_product, has_offer
+
     def _count_indicators(self, content: str) -> tuple[list[str], int]:
         """Count e-commerce indicators in content."""
         content_lower = content.lower()
@@ -403,6 +499,27 @@ class EcommerceChecker:
                 platform = self._detect_platform_from_headers(headers)
                 if platform:
                     break
+
+        # Try meta tag / script src detection if no platform found
+        if not platform:
+            for content in page_contents:
+                meta_result = self._detect_from_meta_tags(content)
+                if meta_result and meta_result != "product_page":
+                    platform = meta_result
+                    break
+                elif meta_result == "product_page":
+                    all_indicators.append("meta:og_type_product")
+                    total_score += 3
+
+        # Check JSON-LD structured data for product signals
+        for content in page_contents:
+            has_product, has_offer = self._detect_from_json_ld(content)
+            if has_product:
+                all_indicators.append("jsonld:Product")
+                total_score += 3
+            if has_offer:
+                all_indicators.append("jsonld:Offer")
+                total_score += 2
 
         # Calculate final result
         # Require either: a detected platform, OR a payment/price signal + action patterns,
