@@ -137,6 +137,19 @@ def test_generate_full_grid_points():
     assert len(points) == 9
 
 
+def test_retail_types_covers_all_verticals():
+    """RETAIL_TYPES should map all 11 verticals to Google Places types."""
+    expected_verticals = {
+        "sporting_goods", "health_wellness", "apparel", "outdoor_camping",
+        "pet_supplies", "beauty_cosmetics", "specialty_food",
+        "running_athletic", "cycling", "baby_kids", "home_goods"
+    }
+    assert set(PlacesSearcher.RETAIL_TYPES.keys()) == expected_verticals
+    # Each vertical should have at least one type
+    for vertical, types in PlacesSearcher.RETAIL_TYPES.items():
+        assert len(types) >= 1, f"{vertical} has no types"
+
+
 def test_grid_points_offset_distance():
     """Offset points should be approximately the requested distance."""
     import math

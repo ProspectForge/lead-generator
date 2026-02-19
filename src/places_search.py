@@ -26,6 +26,13 @@ class PlacesSearcher:
         "health_wellness": ["health_food_store", "drugstore"],
         "apparel": ["clothing_store", "shoe_store"],
         "outdoor_camping": ["camping_store", "outdoor_recreation_store"],
+        "pet_supplies": ["pet_store"],
+        "beauty_cosmetics": ["beauty_salon"],
+        "specialty_food": ["grocery_store"],
+        "running_athletic": ["sporting_goods_store", "shoe_store"],
+        "cycling": ["bicycle_store"],
+        "baby_kids": ["clothing_store"],
+        "home_goods": ["home_goods_store", "furniture_store"],
     }
 
     def __init__(self, api_key: str):
