@@ -1,5 +1,6 @@
 # src/places_search.py
 import asyncio
+import math
 import httpx
 from dataclasses import dataclass
 from typing import Optional
@@ -143,3 +144,44 @@ class PlacesSearcher:
             # Usually: "123 Main St, City, State ZIP"
             return parts[-2].strip() if len(parts) >= 2 else ""
         return ""
+
+    @staticmethod
+    def generate_grid_points(
+        center_lat: float,
+        center_lng: float,
+        offset_km: int = 20,
+        mode: str = "cardinal"
+    ) -> list[tuple[float, float]]:
+        """Generate grid points around a center coordinate.
+
+        Args:
+            center_lat: Center latitude
+            center_lng: Center longitude
+            offset_km: Distance from center to offset points in km
+            mode: "cardinal" for 5 points (center + N/S/E/W),
+                  "full" for 9 points (center + 8 surrounding)
+
+        Returns:
+            List of (lat, lng) tuples
+        """
+        # 1 degree latitude ~= 111km everywhere
+        lat_offset = offset_km / 111.0
+        # 1 degree longitude varies by latitude
+        lng_offset = offset_km / (111.0 * math.cos(math.radians(center_lat)))
+
+        points = [(center_lat, center_lng)]  # Center
+
+        # Cardinal directions: N, S, E, W
+        points.append((center_lat + lat_offset, center_lng))  # North
+        points.append((center_lat - lat_offset, center_lng))  # South
+        points.append((center_lat, center_lng + lng_offset))  # East
+        points.append((center_lat, center_lng - lng_offset))  # West
+
+        if mode == "full":
+            # Diagonal directions: NE, NW, SE, SW
+            points.append((center_lat + lat_offset, center_lng + lng_offset))  # NE
+            points.append((center_lat + lat_offset, center_lng - lng_offset))  # NW
+            points.append((center_lat - lat_offset, center_lng + lng_offset))  # SE
+            points.append((center_lat - lat_offset, center_lng - lng_offset))  # SW
+
+        return points

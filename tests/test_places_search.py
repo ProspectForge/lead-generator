@@ -100,3 +100,55 @@ async def test_nearby_search_uses_correct_endpoint():
         payload = call_args[0][0]
         assert "locationRestriction" in payload
         assert payload["locationRestriction"]["circle"]["radius"] == 5000
+
+
+# Grid Point Generation Tests
+
+def test_generate_cardinal_grid_points():
+    """Should generate center + 4 cardinal offset points."""
+    points = PlacesSearcher.generate_grid_points(
+        center_lat=41.8781,
+        center_lng=-87.6298,
+        offset_km=20,
+        mode="cardinal"
+    )
+    assert len(points) == 5
+    # First point should be center
+    assert points[0] == (41.8781, -87.6298)
+    # North point should have higher latitude
+    assert points[1][0] > 41.8781
+    assert abs(points[1][1] - (-87.6298)) < 0.001  # Same longitude
+    # South point should have lower latitude
+    assert points[2][0] < 41.8781
+    # East point should have higher longitude (less negative)
+    assert points[3][1] > -87.6298
+    # West point should have lower longitude (more negative)
+    assert points[4][1] < -87.6298
+
+
+def test_generate_full_grid_points():
+    """Should generate center + 8 surrounding points."""
+    points = PlacesSearcher.generate_grid_points(
+        center_lat=41.8781,
+        center_lng=-87.6298,
+        offset_km=20,
+        mode="full"
+    )
+    assert len(points) == 9
+
+
+def test_grid_points_offset_distance():
+    """Offset points should be approximately the requested distance."""
+    import math
+    center_lat, center_lng = 41.8781, -87.6298
+    points = PlacesSearcher.generate_grid_points(
+        center_lat=center_lat,
+        center_lng=center_lng,
+        offset_km=20,
+        mode="cardinal"
+    )
+    # Check north point is ~20km away
+    north_lat, north_lng = points[1]
+    # 1 degree latitude ~= 111km
+    lat_diff_km = abs(north_lat - center_lat) * 111
+    assert 18 < lat_diff_km < 22  # Allow ~10% tolerance
