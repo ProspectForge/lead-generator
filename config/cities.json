@@ -1168,7 +1168,12 @@
   },
   "ecommerce": {
     "concurrency": 5,
-    "pages_to_check": 3
+    "pages_to_check": 3,
+    "playwright_fallback": {
+      "enabled": true,
+      "max_percent": 20,
+      "timeout_seconds": 15
+    }
   },
   "search": {
     "concurrency": 10

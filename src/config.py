@@ -66,6 +66,9 @@ class Settings:
     chain_filter_max_cities: int = 8
     ecommerce_concurrency: int = 10
     ecommerce_pages_to_check: int = 3
+    ecommerce_playwright_fallback_enabled: bool = True
+    ecommerce_playwright_fallback_max_percent: int = 20
+    ecommerce_playwright_fallback_timeout: int = 15
     search_concurrency: int = 10
     llm: LLMSettings = field(default_factory=LLMSettings)
     enrichment: EnrichmentSettings = field(default_factory=EnrichmentSettings)
@@ -97,6 +100,13 @@ class Settings:
         self.chain_filter_max_cities = config.get("chain_filter", {}).get("max_cities", 8)
         self.ecommerce_concurrency = config.get("ecommerce", {}).get("concurrency", 10)
         self.ecommerce_pages_to_check = config.get("ecommerce", {}).get("pages_to_check", 3)
+
+        # Load playwright fallback settings
+        pw_config = config.get("ecommerce", {}).get("playwright_fallback", {})
+        self.ecommerce_playwright_fallback_enabled = pw_config.get("enabled", True)
+        self.ecommerce_playwright_fallback_max_percent = pw_config.get("max_percent", 20)
+        self.ecommerce_playwright_fallback_timeout = pw_config.get("timeout_seconds", 15)
+
         self.search_concurrency = config.get("search", {}).get("concurrency", 10)
 
         # Load LLM settings

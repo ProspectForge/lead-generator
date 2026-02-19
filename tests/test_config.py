@@ -47,3 +47,11 @@ def test_discovery_settings_loaded():
     assert s.discovery.nearby_grid_offset_km == 20
     assert s.discovery.nearby_grid_radius_meters == 15000
     assert s.discovery.nearby_grid_points == "cardinal"
+
+def test_ecommerce_playwright_fallback_settings():
+    """Playwright fallback settings should load from config."""
+    from src.config import Settings
+    s = Settings()
+    assert s.ecommerce_playwright_fallback_enabled is True
+    assert s.ecommerce_playwright_fallback_max_percent == 20
+    assert s.ecommerce_playwright_fallback_timeout == 15
