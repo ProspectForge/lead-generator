@@ -300,3 +300,39 @@ def test_no_json_ld_product():
     has_product, has_offer = checker._detect_from_json_ld(html)
     assert has_product is False
     assert has_offer is False
+
+
+def test_spa_trigger_detects_nextjs():
+    """Should trigger Playwright for Next.js SPA with no e-commerce signals."""
+    checker = EcommerceChecker()
+    html = '<html><head></head><body><div id="__next"></div><script src="/_next/static/chunks/main.js"></script></body></html>'
+    assert checker._should_try_playwright(html, platform=None, score=0) is True
+
+
+def test_spa_trigger_detects_react_app():
+    """Should trigger for React app with minimal content."""
+    checker = EcommerceChecker()
+    html = '<html><head></head><body><div id="root"></div><script src="/static/js/bundle.js"></script></body></html>'
+    assert checker._should_try_playwright(html, platform=None, score=0) is True
+
+
+def test_spa_trigger_skips_when_platform_found():
+    """Should NOT trigger when platform already detected."""
+    checker = EcommerceChecker()
+    html = '<html><head></head><body><div id="root"></div></body></html>'
+    assert checker._should_try_playwright(html, platform="shopify", score=0) is False
+
+
+def test_spa_trigger_skips_when_score_positive():
+    """Should NOT trigger when e-commerce signals already found."""
+    checker = EcommerceChecker()
+    html = '<html><head></head><body><div id="root"></div></body></html>'
+    assert checker._should_try_playwright(html, platform=None, score=4) is False
+
+
+def test_spa_trigger_skips_content_rich_pages():
+    """Should NOT trigger for pages with lots of visible text."""
+    checker = EcommerceChecker()
+    # Page with substantial text content (not a SPA shell)
+    html = '<html><head></head><body>' + '<p>Lorem ipsum dolor sit amet. </p>' * 200 + '</body></html>'
+    assert checker._should_try_playwright(html, platform=None, score=0) is False

@@ -181,6 +181,19 @@ class EcommerceChecker:
         "wix": [r"static\.wixstatic\.com"],
     }
 
+    # JS framework markers that indicate SPA rendering
+    SPA_MARKERS = [
+        r'__NEXT_DATA__',
+        r'__NUXT__',
+        r'id=["\']root["\']',
+        r'id=["\']app["\']',
+        r'id=["\']__next["\']',
+        r'/_next/static/',
+        r'/_nuxt/',
+        r'bundle\.js',
+        r'chunk\.js',
+    ]
+
     def __init__(self, pages_to_check: int = None, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
 
@@ -383,6 +396,37 @@ class EcommerceChecker:
                 continue
 
         return has_product, has_offer
+
+    def _should_try_playwright(self, html: str, platform: Optional[str], score: int) -> bool:
+        """Determine if Playwright fallback should be attempted.
+
+        Triggers when: HTML returned successfully, no platform detected,
+        no e-commerce score, SPA markers present, and minimal visible text.
+        """
+        if platform is not None:
+            return False
+        if score > 0:
+            return False
+
+        # Check for SPA markers
+        has_spa_marker = False
+        for marker in self.SPA_MARKERS:
+            if re.search(marker, html, re.IGNORECASE):
+                has_spa_marker = True
+                break
+
+        if not has_spa_marker:
+            return False
+
+        # Check visible text content — strip tags and measure
+        visible_text = re.sub(r'<[^>]+>', '', html)
+        visible_text = re.sub(r'\s+', ' ', visible_text).strip()
+
+        # If page has substantial visible text, it's not a JS shell
+        if len(visible_text) > 2000:
+            return False
+
+        return True
 
     def _count_indicators(self, content: str) -> tuple[list[str], int]:
         """Count e-commerce indicators in content."""
