@@ -1008,6 +1008,127 @@
       "cookware store"
     ]
   },
+  "lean_queries": {
+    "health_wellness": [
+      "supplement store",
+      "health food store",
+      "sports nutrition store"
+    ],
+    "sporting_goods": [
+      "sporting goods store",
+      "outdoor gear store",
+      "running shoe store"
+    ],
+    "apparel": [
+      "clothing boutique",
+      "activewear store",
+      "workwear store"
+    ],
+    "pet_supplies": [
+      "pet supply store",
+      "pet food store"
+    ],
+    "beauty_cosmetics": [
+      "beauty supply store",
+      "cosmetics store"
+    ],
+    "specialty_food": [
+      "gourmet food store",
+      "specialty grocery"
+    ],
+    "running_athletic": [
+      "running store",
+      "triathlon store"
+    ],
+    "cycling": [
+      "bike shop",
+      "cycling store"
+    ],
+    "outdoor_camping": [
+      "camping store",
+      "hiking gear store",
+      "outdoor adventure store"
+    ],
+    "baby_kids": [
+      "baby store",
+      "children's clothing store"
+    ],
+    "home_goods": [
+      "kitchenware store",
+      "home goods store"
+    ]
+  },
+  "lean_cities": {
+    "us": [
+      "Chicago, IL",
+      "Houston, TX",
+      "Phoenix, AZ",
+      "Philadelphia, PA",
+      "San Diego, CA",
+      "Dallas, TX",
+      "Austin, TX",
+      "Jacksonville, FL",
+      "Columbus, OH",
+      "Charlotte, NC",
+      "Indianapolis, IN",
+      "Seattle, WA",
+      "Denver, CO",
+      "Boston, MA",
+      "Nashville-Davidson, TN",
+      "Portland, OR",
+      "Las Vegas, NV",
+      "Milwaukee, WI",
+      "Sacramento, CA",
+      "Atlanta, GA",
+      "Kansas City, MO",
+      "Raleigh, NC",
+      "Miami, FL",
+      "Minneapolis, MN",
+      "Tampa, FL",
+      "New Orleans, LA",
+      "Cleveland, OH",
+      "Pittsburgh, PA",
+      "Cincinnati, OH",
+      "St. Louis, MO",
+      "Orlando, FL",
+      "San Antonio, TX",
+      "Salt Lake City, UT",
+      "Richmond, VA",
+      "Boise City, ID",
+      "Birmingham, AL",
+      "Grand Rapids, MI",
+      "Greenville, SC",
+      "Knoxville, TN",
+      "Tucson, AZ",
+      "Omaha, NE",
+      "Des Moines, IA",
+      "Charleston, SC",
+      "Fort Collins, CO",
+      "Asheville, NC",
+      "Madison, WI",
+      "Spokane, WA",
+      "Bend, OR",
+      "Boulder, CO",
+      "Santa Barbara, CA"
+    ],
+    "canada": [
+      "Toronto, ON",
+      "Vancouver, BC",
+      "Calgary, AB",
+      "Edmonton, AB",
+      "Ottawa, ON",
+      "Montreal, QC",
+      "Winnipeg, MB",
+      "Halifax, NS",
+      "Victoria, BC",
+      "Hamilton, ON",
+      "Kitchener, ON",
+      "London, ON",
+      "Kelowna, BC",
+      "Saskatoon, SK",
+      "Quebec City, QC"
+    ]
+  },
   "known_large_chains": [
     "gnc",
     "vitamin shoppe",
@@ -1176,7 +1297,8 @@
     }
   },
   "search": {
-    "concurrency": 10
+    "concurrency": 10,
+    "mode": "lean"
   },
   "llm": {
     "enabled": true,
