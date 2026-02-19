@@ -3,13 +3,11 @@ import pytest
 from src.config import Settings
 
 def test_settings_loads_from_env(monkeypatch):
-    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "test_google_key")
-    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_firecrawl_key")
+    monkeypatch.setenv("SERPAPI_API_KEY", "test_serpapi_key")
 
     settings = Settings()
 
-    assert settings.google_places_api_key == "test_google_key"
-    assert settings.firecrawl_api_key == "test_firecrawl_key"
+    assert settings.serpapi_api_key == "test_serpapi_key"
 
 def test_settings_loads_cities_config():
     settings = Settings()
@@ -55,3 +53,44 @@ def test_ecommerce_playwright_fallback_settings():
     assert s.ecommerce_playwright_fallback_enabled is True
     assert s.ecommerce_playwright_fallback_max_percent == 20
     assert s.ecommerce_playwright_fallback_timeout == 15
+
+def test_settings_loads_search_mode():
+    settings = Settings()
+    assert settings.search_mode in ("lean", "extended")
+
+def test_settings_loads_lean_cities():
+    settings = Settings()
+    assert "us" in settings.lean_cities
+    assert "canada" in settings.lean_cities
+    assert len(settings.lean_cities["us"]) >= 40
+    assert len(settings.lean_cities["canada"]) >= 10
+
+def test_settings_loads_lean_queries():
+    settings = Settings()
+    assert "health_wellness" in settings.lean_queries
+    assert len(settings.lean_queries["health_wellness"]) >= 2
+    assert len(settings.lean_queries["health_wellness"]) <= 5
+
+def test_settings_get_cities_for_mode_lean():
+    settings = Settings()
+    settings.search_mode = "lean"
+    cities = settings.get_cities_for_mode()
+    assert len(cities["us"]) < len(settings.cities["us"])
+
+def test_settings_get_cities_for_mode_extended():
+    settings = Settings()
+    settings.search_mode = "extended"
+    cities = settings.get_cities_for_mode()
+    assert cities["us"] == settings.cities["us"]
+
+def test_settings_get_queries_for_mode_lean():
+    settings = Settings()
+    settings.search_mode = "lean"
+    queries = settings.get_queries_for_mode()
+    assert len(queries["health_wellness"]) <= 5
+
+def test_settings_get_queries_for_mode_extended():
+    settings = Settings()
+    settings.search_mode = "extended"
+    queries = settings.get_queries_for_mode()
+    assert len(queries["health_wellness"]) >= 10

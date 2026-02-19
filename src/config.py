@@ -54,7 +54,7 @@ class DiscoverySettings:
 
 @dataclass
 class Settings:
-    google_places_api_key: str = ""
+    serpapi_api_key: str = ""
     firecrawl_api_key: str = ""  # Legacy, no longer used
     flaresolverr_url: str = ""
     openai_api_key: str = ""
@@ -78,9 +78,12 @@ class Settings:
     quality_gate_max_employees: int = 500
     health_check_concurrency: int = 10
     discovery: DiscoverySettings = field(default_factory=DiscoverySettings)
+    search_mode: str = "lean"
+    lean_cities: dict = field(default_factory=dict)
+    lean_queries: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+        self.serpapi_api_key = os.getenv("SERPAPI_API_KEY", "")
         self.firecrawl_api_key = os.getenv("FIRECRAWL_API_KEY", "")
         self.flaresolverr_url = os.getenv("FLARESOLVERR_URL", "")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
@@ -107,7 +110,20 @@ class Settings:
         self.ecommerce_playwright_fallback_max_percent = pw_config.get("max_percent", 20)
         self.ecommerce_playwright_fallback_timeout = pw_config.get("timeout_seconds", 15)
 
-        self.search_concurrency = config.get("search", {}).get("concurrency", 10)
+        search_config = config.get("search", {})
+        self.search_concurrency = search_config.get("concurrency", 10)
+
+        # Load search mode
+        self.search_mode = search_config.get("mode", "lean")
+
+        # Load lean cities
+        self.lean_cities = {
+            "us": config.get("lean_cities", {}).get("us", []),
+            "canada": config.get("lean_cities", {}).get("canada", []),
+        }
+
+        # Load lean queries
+        self.lean_queries = config.get("lean_queries", {})
 
         # Load LLM settings
         llm_config = config.get("llm", {})
@@ -172,6 +188,18 @@ class Settings:
                 city_name = city_full.split(",")[0].strip()
                 city_names.append(city_name)
         return city_names
+
+    def get_cities_for_mode(self) -> dict:
+        """Return city lists based on current search mode."""
+        if self.search_mode == "lean":
+            return self.lean_cities
+        return self.cities
+
+    def get_queries_for_mode(self) -> dict:
+        """Return query lists based on current search mode."""
+        if self.search_mode == "lean":
+            return self.lean_queries
+        return self.search_queries
 
 
 settings = Settings()
