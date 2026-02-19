@@ -18,7 +18,7 @@ import httpx
 from urllib.parse import urlparse
 
 from src.config import settings
-from src.places_search import PlacesSearcher, PlaceResult
+from src.serpapi_search import SerpApiSearcher, PlaceResult
 from src.brand_grouper import BrandGrouper, BrandGroup
 from src.ecommerce_check import EcommerceChecker
 from src.linkedin_enrich import LinkedInEnricher, LinkedInCompanyData
@@ -169,6 +169,7 @@ class Pipeline:
             "quality_gate_max_locations": settings.quality_gate_max_locations,
             "quality_gate_max_employees": settings.quality_gate_max_employees,
             "ecommerce_pages_to_check": settings.ecommerce_pages_to_check,
+            "search_mode": settings.search_mode,
         }
 
     @staticmethod
@@ -194,6 +195,8 @@ class Pipeline:
             settings.quality_gate_max_employees = saved["quality_gate_max_employees"]
         if "ecommerce_pages_to_check" in saved:
             settings.ecommerce_pages_to_check = saved["ecommerce_pages_to_check"]
+        if "search_mode" in saved:
+            settings.search_mode = saved["search_mode"]
 
     def _save_checkpoint(self, checkpoint: Checkpoint):
         """Save checkpoint to file."""
@@ -270,10 +273,10 @@ class Pipeline:
         ))
 
     async def stage_1_search(self, verticals: list[str], countries: list[str]) -> list[dict]:
-        """Search Google Places for businesses (parallel)."""
-        self._show_stage_header(1, "Google Places Search", "Finding retail businesses across cities")
+        """Search for businesses via SerpAPI (parallel)."""
+        self._show_stage_header(1, "Business Search (SerpAPI)", "Finding retail businesses across cities")
 
-        searcher = PlacesSearcher(api_key=settings.google_places_api_key)
+        searcher = SerpApiSearcher(api_key=settings.serpapi_api_key)
         concurrency = settings.search_concurrency
         semaphore = asyncio.Semaphore(concurrency)
 
@@ -1364,7 +1367,8 @@ class Pipeline:
         self,
         verticals: list[str] = ["health_wellness", "sporting_goods", "apparel"],
         countries: list[str] = ["us", "canada"],
-        resume_checkpoint: Optional[Path] = None
+        resume_checkpoint: Optional[Path] = None,
+        search_mode: Optional[str] = None,
     ) -> str:
         """Run the full pipeline, optionally resuming from a checkpoint."""
         start_time = datetime.now()
@@ -1387,6 +1391,7 @@ class Pipeline:
                 )
                 settings_block = (
                     f"[bold]Active Settings:[/bold]\n"
+                    f"  Search mode:              {settings.search_mode.capitalize()}\n"
                     f"  Search concurrency:       {settings.search_concurrency}\n"
                     f"  E-commerce concurrency:   {settings.ecommerce_concurrency}\n"
                     f"  Health check concurrency: {settings.health_check_concurrency}\n"
@@ -1436,6 +1441,7 @@ class Pipeline:
                 f"Verticals: {', '.join(verticals)}\n"
                 f"Countries: {', '.join(countries)}\n\n"
                 f"[bold]Settings:[/bold]\n"
+                f"  Search mode:           {settings.search_mode.capitalize()}\n"
                 f"  Search concurrency:    {settings.search_concurrency}\n"
                 f"  E-commerce concurrency:{settings.ecommerce_concurrency}\n"
                 f"  Health check concurrency: {settings.health_check_concurrency}\n"
@@ -1444,6 +1450,10 @@ class Pipeline:
                 title="[bold blue]🚀 Lead Generator[/bold blue]",
                 border_style="blue",
             ))
+
+        # Apply search mode if specified
+        if search_mode:
+            settings.search_mode = search_mode
 
         # Initialize data from checkpoint or empty
         places = checkpoint.places if checkpoint and start_stage >= 1 else []
