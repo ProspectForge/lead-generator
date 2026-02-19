@@ -233,3 +233,20 @@ async def test_fetch_site_pages_returns_headers():
     assert len(pages) == 1
     assert len(all_headers) == 1
     assert all_headers[0].get("x-powered-by") == "Shopify"
+
+
+@pytest.mark.parametrize("headers_dict,expected_platform", [
+    ({"x-powered-by": "Shopify"}, "shopify"),
+    ({"x-shopid": "12345"}, "shopify"),
+    ({"x-powered-by": "WP Engine", "set-cookie": "woocommerce_items_in_cart=0"}, "woocommerce"),
+    ({"set-cookie": "_shopify_s=abc123; path=/"}, "shopify"),
+    ({"set-cookie": "frontend=abc123; path=/", "x-powered-by": "Magento"}, "magento"),
+    ({"server": "BigCommerce"}, "bigcommerce"),
+    ({"content-type": "text/html"}, None),  # No platform signal
+])
+def test_detect_platform_from_headers(headers_dict, expected_platform):
+    """Should detect platform from HTTP response headers."""
+    checker = EcommerceChecker()
+    headers = httpx.Headers(headers_dict)
+    result = checker._detect_platform_from_headers(headers)
+    assert result == expected_platform

@@ -142,6 +142,26 @@ class EcommerceChecker:
         ],
     }
 
+    # Header-based platform detection rules
+    HEADER_PLATFORM_RULES = {
+        "shopify": {
+            "x-powered-by": [r"shopify"],
+            "x-shopid": [r".+"],
+            "x-shopify-stage": [r".+"],
+            "set-cookie": [r"_shopify_s=", r"_shopify_y="],
+        },
+        "woocommerce": {
+            "set-cookie": [r"woocommerce_items_in_cart", r"wp_woocommerce_session"],
+        },
+        "magento": {
+            "x-powered-by": [r"magento"],
+            "set-cookie": [r"^frontend="],
+        },
+        "bigcommerce": {
+            "server": [r"bigcommerce"],
+        },
+    }
+
     def __init__(self, pages_to_check: int = None, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
 
@@ -257,6 +277,17 @@ class EcommerceChecker:
                     return platform
         return None
 
+    def _detect_platform_from_headers(self, headers: httpx.Headers) -> Optional[str]:
+        """Detect e-commerce platform from HTTP response headers."""
+        for platform, rules in self.HEADER_PLATFORM_RULES.items():
+            for header_name, patterns in rules.items():
+                header_value = headers.get(header_name, "")
+                if header_value:
+                    for pattern in patterns:
+                        if re.search(pattern, header_value, re.IGNORECASE):
+                            return platform
+        return None
+
     def _count_indicators(self, content: str) -> tuple[list[str], int]:
         """Count e-commerce indicators in content."""
         content_lower = content.lower()
@@ -365,6 +396,13 @@ class EcommerceChecker:
             for mp, link in links.items():
                 if mp not in all_marketplace_links:
                     all_marketplace_links[mp] = link
+
+        # Try header-based detection if no platform found from HTML
+        if not platform and page_headers:
+            for headers in page_headers:
+                platform = self._detect_platform_from_headers(headers)
+                if platform:
+                    break
 
         # Calculate final result
         # Require either: a detected platform, OR a payment/price signal + action patterns,
