@@ -1,6 +1,7 @@
 # src/ecommerce_check.py
 import asyncio
 import httpx
+import random
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -23,7 +24,7 @@ class EcommerceResult:
 class EcommerceChecker:
     DEFAULT_PAGES_TO_CHECK = 3
     MAX_RETRIES = 3
-    RETRY_DELAYS = [1, 2, 4]
+    RETRY_DELAYS = [2, 5, 10]
     REQUEST_TIMEOUT = 15.0
 
     # Common shop page paths to probe after the homepage
@@ -32,32 +33,34 @@ class EcommerceChecker:
         "/collections/all", "/shop/all", "/catalog",
     ]
 
-    USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ]
 
     # E-commerce platform signatures (high confidence)
     PLATFORM_SIGNATURES = {
         "shopify": [r'cdn\.shopify\.com', r'myshopify\.com', r'shopify-assets'],
-        "woocommerce": [r'woocommerce', r'wc-cart', r'add_to_cart'],
+        "woocommerce": [r'wp-content/plugins/woocommerce', r'woocommerce', r'wc-add-to-cart', r'wp-json/wc/'],
         "bigcommerce": [r'bigcommerce\.com', r'cdn\.bc'],
-        "squarespace": [r'squarespace.*commerce', r'sqs-add-to-cart'],
-        "magento": [r'mage/', r'magento', r'varien'],
+        "squarespace": [r'squarespace-commerce', r'sqs-add-to-cart', r'squarespace\.com/commerce'],
+        "magento": [r'Mage\.Cookies', r'mage/cookies', r'/static/version\d+/', r'Magento_Ui', r'magento-init', r'data-mage-init', r'varien/js'],
         "shopware": [r'shopware'],
         "prestashop": [r'prestashop'],
     }
 
-    # E-commerce action patterns
+    # E-commerce action patterns (use explicit separators, not regex wildcards)
     ECOMMERCE_PATTERNS = [
-        r'add.to.cart',
-        r'add.to.bag',
-        r'buy.now',
-        r'shop.now',
-        r'checkout',
-        r'shopping.cart',
-        r'view.cart',
+        r'add[\s_\-]to[\s_\-]cart',
+        r'add[\s_\-]to[\s_\-]bag',
+        r'\bbuy[\s_\-]now\b',
+        r'\bshop[\s_\-]now\b',
+        r'\bcheckout\b',
+        r'shopping[\s_\-]cart',
+        r'view[\s_\-]cart',
     ]
 
     # Payment indicators
@@ -136,16 +139,27 @@ class EcommerceChecker:
         """Fetch a single page's HTML with retries. Returns (html, error_reason)."""
         for attempt in range(self.MAX_RETRIES):
             try:
+                ua = random.choice(self.USER_AGENTS)
                 response = await client.get(
                     url,
                     follow_redirects=True,
-                    headers={"User-Agent": self.USER_AGENT},
+                    headers={
+                        "User-Agent": ua,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                    },
                 )
-                # Retry on rate limit with exponential backoff
+                # Retry on rate limit with longer backoff + jitter
                 if response.status_code == 429:
                     if attempt < self.MAX_RETRIES - 1:
-                        retry_after = int(response.headers.get("Retry-After", self.RETRY_DELAYS[attempt] * 2))
-                        await asyncio.sleep(min(retry_after, 10))
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            delay = min(int(retry_after), 30)
+                        else:
+                            delay = self.RETRY_DELAYS[attempt]
+                        jitter = random.uniform(0.5, 2.0)
+                        await asyncio.sleep(delay + jitter)
                         continue
                     return None, "HTTP 429"
                 if response.status_code >= 400:
@@ -338,7 +352,16 @@ class EcommerceChecker:
                     all_marketplace_links[mp] = link
 
         # Calculate final result
-        has_ecommerce = total_score >= 4 or platform is not None
+        # Require either: a detected platform, OR a payment/price signal + action patterns,
+        # OR a very high score from multiple categories
+        has_payment_or_price = any(
+            "payment:" in i or "price:" in i for i in all_indicators
+        )
+        has_ecommerce = (
+            platform is not None
+            or (total_score >= 4 and has_payment_or_price)
+            or total_score >= 8
+        )
         confidence = min(total_score / 10, 1.0) if has_ecommerce else total_score / 15
 
         # Determine priority based on marketplace presence

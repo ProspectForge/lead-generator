@@ -155,6 +155,9 @@ class NameNormalizer:
             words.pop()
         result = ' '.join(words)
 
+        # Layer 3a2: Strip store numbers from end (before store type stripping)
+        result = re.sub(r'\s*#?\d+$', '', result).strip()
+
         # Layer 3b: Strip store types from end
         for store_type in sorted(self.STORE_TYPES, key=len, reverse=True):
             if result.endswith(' ' + store_type):
@@ -174,16 +177,25 @@ class NameNormalizer:
                 break
 
         # Layer 3d: Strip city names from end (if not protected)
+        # Check multi-word city suffixes (e.g. "Daytona Beach", "Virginia Beach")
         words = result.split()
         if words:
-            last_word = words[-1]
-            if last_word in self.city_names and last_word not in protected_words:
-                candidate = ' '.join(words[:-1])
-                if len(candidate) >= 3:
-                    result = candidate
-
-        # Layer 3e: Strip store numbers from end
-        result = re.sub(r'\s*#?\d+$', '', result).strip()
+            stripped = False
+            for n_words in range(min(3, len(words)), 0, -1):
+                suffix = ' '.join(words[-n_words:])
+                if suffix in self.city_names and suffix not in protected_words:
+                    candidate = ' '.join(words[:-n_words])
+                    if len(candidate) >= 3:
+                        result = candidate
+                        stripped = True
+                        break
+            # Also try single-word state abbreviations (e.g. trailing "holladay")
+            if not stripped and words:
+                last_word = words[-1]
+                if last_word in self.city_names and last_word not in protected_words:
+                    candidate = ' '.join(words[:-1])
+                    if len(candidate) >= 3:
+                        result = candidate
 
         # Safety: never return less than 3 characters (unless input was shorter)
         if len(result) < 3 and len(original) >= 3:
@@ -202,15 +214,17 @@ class BlocklistChecker:
     def is_blocked(self, name: str) -> bool:
         """Check if a normalized brand name should be blocked."""
         normalized = self.normalizer.normalize(name)
+        # Strip apostrophes for matching ("trader joe's" → "trader joes")
+        clean = normalized.replace("'", "").replace("\u2019", "")
 
-        # Exact match
-        if normalized in self.blocklist:
+        # Exact match (with and without apostrophe)
+        if normalized in self.blocklist or clean in self.blocklist:
             return True
 
         # Prefix match: "nike store" starts with "nike"
         # But protect against false positives like "nikesha"
         for chain in self.blocklist:
-            if normalized.startswith(chain + ' '):
+            if normalized.startswith(chain + ' ') or clean.startswith(chain + ' '):
                 return True
             if normalized.startswith(chain + "'s "):
                 return True
@@ -461,8 +475,25 @@ class BrandGrouper:
                     # Keep separate
                     merged.extend(domain_groups)
 
-        # Add groups without domains
-        merged.extend(no_domain)
+        # Merge no-domain groups into domain groups with the same normalized_name
+        by_name = {}
+        for g in merged:
+            by_name.setdefault(g.normalized_name, g)
+
+        remaining_no_domain = []
+        for g in no_domain:
+            if g.normalized_name in by_name:
+                base = by_name[g.normalized_name]
+                base.original_names.extend(g.original_names)
+                base.location_count += g.location_count
+                base.locations.extend(g.locations)
+                for city in g.cities:
+                    if city not in base.cities:
+                        base.cities.append(city)
+            else:
+                remaining_no_domain.append(g)
+
+        merged.extend(remaining_no_domain)
 
         return merged
 

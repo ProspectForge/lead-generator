@@ -22,6 +22,9 @@ class EnrichmentSettings:
     enabled: bool = True
     provider: str = "linkedin"  # "linkedin" (free/scraping) or "apollo" (paid)
     max_contacts: int = 4
+    concurrency: int = 3  # Parallel enrichment requests
+    use_playwright: bool = True  # Use Playwright for JS-rendered LinkedIn pages
+    cookie_file: str = ""  # Path to LinkedIn cookies JSON for authenticated scraping
 
 
 @dataclass
@@ -99,7 +102,10 @@ class Settings:
         self.enrichment = EnrichmentSettings(
             enabled=enrichment_config.get("enabled", True),
             provider=enrichment_config.get("provider", "linkedin"),
-            max_contacts=enrichment_config.get("max_contacts", 4)
+            max_contacts=enrichment_config.get("max_contacts", 4),
+            concurrency=enrichment_config.get("concurrency", 3),
+            use_playwright=enrichment_config.get("use_playwright", True),
+            cookie_file=os.getenv("LINKEDIN_COOKIE_FILE", enrichment_config.get("cookie_file", "")),
         )
 
         # Load email verification settings

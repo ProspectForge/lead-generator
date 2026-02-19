@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.pipeline import Pipeline
 from src.brand_grouper import BrandGroup
+from src.linkedin_enrich import Contact
 
 @pytest.mark.asyncio
 async def test_pipeline_runs_all_stages():
@@ -126,6 +127,11 @@ async def test_linkedin_enrichment_uses_page_scrape():
         mock_enricher = MagicMock()
         mock_enricher.find_company = AsyncMock(return_value="https://linkedin.com/company/test-brand")
         mock_enricher.scrape_company_page = AsyncMock(return_value=mock_company_data)
+        mock_enricher.find_contacts = AsyncMock(return_value=[
+            Contact(name="John CEO", title="CEO", linkedin_url="https://linkedin.com/in/john"),
+            Contact(name="Jane COO", title="COO", linkedin_url="https://linkedin.com/in/jane"),
+        ])
+        mock_enricher._check_flaresolverr = AsyncMock(return_value=False)
         mock_enricher_cls.return_value = mock_enricher
 
         result = await pipeline._enrich_with_linkedin(brands)
@@ -134,3 +140,4 @@ async def test_linkedin_enrichment_uses_page_scrape():
     assert result[0]["contact_1_name"] == "John CEO"
     assert result[0]["contact_1_title"] == "CEO"
     mock_enricher.scrape_company_page.assert_called_once()
+    mock_enricher.find_contacts.assert_called_once()

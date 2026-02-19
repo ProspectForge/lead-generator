@@ -137,6 +137,10 @@ async def test_linkedin_supplements_contacts():
     with patch("src.pipeline.LinkedInEnricher") as mock_enricher_cls:
         mock_enricher = MagicMock()
         mock_enricher.scrape_company_page = AsyncMock(return_value=mock_linkedin_data)
+        mock_enricher.find_contacts = AsyncMock(return_value=[
+            Contact(name="LI Person A", title="COO", linkedin_url="https://linkedin.com/in/a"),
+            Contact(name="LI Person B", title="Director", linkedin_url="https://linkedin.com/in/b"),
+        ])
         mock_enricher_cls.return_value = mock_enricher
 
         result = await pipeline.stage_4b_quality_gate(leads)

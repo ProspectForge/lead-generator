@@ -1136,13 +1136,38 @@
     "golds gym",
     "goodlife fitness",
     "anytime fitness",
-    "planet fitness"
+    "planet fitness",
+    "giant food",
+    "giant eagle",
+    "food lion",
+    "publix",
+    "kroger",
+    "albertsons",
+    "aldi",
+    "lidl",
+    "winn dixie",
+    "heb",
+    "meijer",
+    "piggly wiggly",
+    "ctown supermarkets",
+    "bravo supermarkets",
+    "airgas",
+    "herbalife",
+    "burn boot camp",
+    "orangetheory",
+    "f45 training",
+    "crunch fitness",
+    "equinox",
+    "lifetime fitness",
+    "la fitness",
+    "24 hour fitness",
+    "snap fitness"
   ],
   "chain_filter": {
     "max_cities": 20
   },
   "ecommerce": {
-    "concurrency": 10,
+    "concurrency": 5,
     "pages_to_check": 3
   },
   "search": {
@@ -1156,7 +1181,9 @@
   "enrichment": {
     "enabled": true,
     "provider": "apollo",
-    "max_contacts": 4
+    "max_contacts": 4,
+    "use_playwright": true,
+    "cookie_file": ""
   },
   "email_verification": {
     "enabled": false,

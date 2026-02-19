@@ -1,6 +1,8 @@
 # src/pipeline.py
 import asyncio
 import json
+import random
+import re
 import pandas as pd
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -13,6 +15,7 @@ from rich.table import Table
 from rich import box
 
 import httpx
+from urllib.parse import urlparse
 
 from src.config import settings
 from src.places_search import PlacesSearcher, PlaceResult
@@ -61,6 +64,22 @@ class Pipeline:
         "godaddy.com", "sedoparking.com", "hugedomains.com",
         "afternic.com", "dan.com", "parkingcrew.net",
         "bodis.com", "above.com", "undeveloped.com",
+    }
+
+    # Non-commerce domains: social profiles, link aggregators, store locators, etc.
+    # These are never real company e-commerce websites.
+    NON_COMMERCE_DOMAINS = {
+        "linktr.ee", "linktree.com",
+        "instagram.com", "facebook.com", "twitter.com", "x.com",
+        "tiktok.com", "youtube.com", "pinterest.com",
+        "yelp.com", "tripadvisor.com",
+        "boards.com", "carrd.co", "bio.link", "beacons.ai",
+        "google.com", "goo.gl", "bit.ly",
+    }
+
+    # URL path prefixes that indicate store locator pages (not actual company sites)
+    STORE_LOCATOR_PREFIXES = {
+        "locations.", "stores.", "store-locator.",
     }
 
     def __init__(self):
@@ -258,38 +277,51 @@ class Pipeline:
         concurrency = settings.search_concurrency
         semaphore = asyncio.Semaphore(concurrency)
 
-        cities = []
+        # Build city list with country tag
+        city_country = []  # [(city, country), ...]
         for country in countries:
-            cities.extend(settings.cities.get(country, []))
+            for city in settings.cities.get(country, []):
+                city_country.append((city, country))
 
-        # Build all search tasks: (city, query, vertical)
+        # Build all search tasks: (city, query, vertical, country)
         search_tasks = []
         for vertical in verticals:
             for query in settings.search_queries.get(vertical, []):
-                for city in cities:
-                    search_tasks.append((city, query, vertical))
+                for city, country in city_country:
+                    search_tasks.append((city, query, vertical, country))
 
         total_searches = len(search_tasks)
-        console.print(f"  [dim]• {len(cities)} cities × {len(set((q, v) for _, q, v in search_tasks))} queries = {total_searches} searches ({concurrency} parallel)[/dim]")
+        console.print(f"  [dim]• {len(city_country)} cities × {len(set((q, v) for _, q, v, _ in search_tasks))} queries = {total_searches} searches ({concurrency} parallel)[/dim]")
         console.print()
 
-        async def do_search(city: str, query: str, vertical: str, progress, task) -> list[dict]:
+        # Country → expected address suffix for validation
+        country_address_markers = {
+            "us": ["USA", "United States"],
+            "canada": ["Canada"],
+        }
+
+        async def do_search(city: str, query: str, vertical: str, country: str, progress, task) -> list[dict]:
             """Execute a single search with semaphore for rate limiting."""
             async with semaphore:
                 try:
                     results = await searcher.search(query, city, vertical=vertical)
                     progress.advance(task)
-                    return [
-                        {
+                    markers = country_address_markers.get(country, [])
+                    places = []
+                    for r in results:
+                        # Validate address matches search country
+                        if markers and r.address:
+                            if not any(marker in r.address for marker in markers):
+                                continue  # Skip cross-country results
+                        places.append({
                             "name": r.name,
                             "address": r.address,
                             "website": r.website,
                             "place_id": r.place_id,
                             "city": r.city,
                             "vertical": r.vertical
-                        }
-                        for r in results
-                    ]
+                        })
+                    return places
                 except Exception as e:
                     console.print(f"  [red]✗ Error: {query} in {city}: {e}[/red]")
                     progress.advance(task)
@@ -306,7 +338,7 @@ class Pipeline:
             task = progress.add_task(f"[cyan]Searching {total_searches} locations...", total=total_searches)
 
             # Run all searches in parallel (limited by semaphore)
-            coros = [do_search(city, query, vertical, progress, task) for city, query, vertical in search_tasks]
+            coros = [do_search(city, query, vertical, country, progress, task) for city, query, vertical, country in search_tasks]
             results_lists = await asyncio.gather(*coros)
 
         # Flatten results
@@ -321,12 +353,30 @@ class Pipeline:
         console.print(f"  [dim]  Saved to: {raw_file}[/dim]")
         return all_results
 
+    def _deduplicate_places(self, places: list[dict]) -> list[dict]:
+        """Remove duplicate places (same place_id found from different city searches)."""
+        seen_ids = {}
+        deduped = []
+        for place in places:
+            pid = place.get("place_id", "")
+            if not pid or pid not in seen_ids:
+                if pid:
+                    seen_ids[pid] = True
+                deduped.append(place)
+        removed = len(places) - len(deduped)
+        if removed > 0:
+            console.print(f"  [dim]• Removed {removed} duplicate places (same place_id from different city searches)[/dim]")
+        return deduped
+
     def stage_2_group(self, places: list[dict]) -> list[BrandGroup]:
         """Group places by brand and filter by location count."""
         self._show_stage_header(2, "Brand Grouping", "Normalizing names and grouping by brand")
 
+        # Deduplicate places by place_id before grouping
+        places = self._deduplicate_places(places)
+
         with console.status("[cyan]Analyzing brands...[/cyan]"):
-            grouper = BrandGrouper(min_locations=2, max_locations=10, resolve_redirects=True)
+            grouper = BrandGrouper(min_locations=3, max_locations=10, resolve_redirects=True)
             groups = grouper.group(places)
 
             # Apply blocklist filter
@@ -390,8 +440,8 @@ class Pipeline:
             # Check 2: Found in too many cities (likely national)
             if num_cities >= max_cities:
                 brand.is_large_chain = True
-                # Estimate: if found in 8 of 50 cities, extrapolate to ~80+ nationwide
-                brand.estimated_nationwide = int(brand.location_count * (50 / num_cities) * 1.5)
+                # Estimate nationwide locations based on how many cities were searched
+                brand.estimated_nationwide = int(brand.location_count * (max(total_searched, 1) / num_cities) * 1.5)
                 large_chains_found += 1
                 console.print(f"  [red]✗ Large chain:[/red] {brand_name} (found in {num_cities} cities)")
                 continue
@@ -422,10 +472,35 @@ class Pipeline:
 
         brands_with_site = [b for b in brands if b.website]
         brands_without_site = [b for b in brands if not b.website]
+
+        # Pre-filter: remove non-commerce websites (social profiles, link aggregators, store locators)
+        filtered_brands = []
+        non_commerce_count = 0
+        for brand in brands_with_site:
+            url = brand.website or ""
+            parsed = urlparse(url if url.startswith(("http://", "https://")) else f"https://{url}")
+            host = (parsed.netloc or "").lower().lstrip("www.")
+
+            # Check non-commerce domains
+            is_non_commerce = any(host == d or host.endswith("." + d) for d in self.NON_COMMERCE_DOMAINS)
+
+            # Check store locator subdomains
+            if not is_non_commerce:
+                is_non_commerce = any(host.startswith(prefix) for prefix in self.STORE_LOCATOR_PREFIXES)
+
+            if is_non_commerce:
+                non_commerce_count += 1
+                console.print(f"  [red]✗ Non-commerce URL:[/red] {brand.normalized_name.title()} — {url[:60]}")
+            else:
+                filtered_brands.append(brand)
+
+        brands_with_site = filtered_brands
         concurrency = settings.health_check_concurrency
         semaphore = asyncio.Semaphore(concurrency)
 
         console.print(f"  [dim]• Checking {len(brands_with_site)} websites ({concurrency} parallel)[/dim]")
+        if non_commerce_count:
+            console.print(f"  [dim]• Filtered {non_commerce_count} non-commerce URLs (social/link aggregator/store locator)[/dim]")
         if brands_without_site:
             console.print(f"  [dim]• Passing through {len(brands_without_site)} brands without websites[/dim]")
         console.print()
@@ -510,11 +585,15 @@ class Pipeline:
             console.print("  [yellow]⚠ No brands to check[/yellow]")
             return []
 
+        import random
+
         concurrency = settings.ecommerce_concurrency
         checker = EcommerceChecker(
             pages_to_check=settings.ecommerce_pages_to_check
         )
         semaphore = asyncio.Semaphore(concurrency)
+        # Rate limiter: allow max N requests per second to avoid CDN-level 429s
+        request_interval = 0.3  # seconds between request starts
         results: dict[str, tuple[BrandGroup, bool]] = {}  # brand_name -> (brand, has_ecommerce)
         skipped = 0
 
@@ -530,9 +609,11 @@ class Pipeline:
         crawl_failure_count = 0
         fail_reasons: dict[str, int] = {}
 
-        async def check_brand(brand: BrandGroup, progress, task) -> tuple[BrandGroup, bool]:
-            """Check a single brand with semaphore for rate limiting."""
+        async def check_brand(brand: BrandGroup, idx: int, progress, task) -> tuple[BrandGroup, bool]:
+            """Check a single brand with semaphore + staggered start."""
             nonlocal crawl_failure_count
+            # Stagger request starts to avoid CDN-level rate limits
+            await asyncio.sleep(idx * request_interval + random.uniform(0, 0.2))
             async with semaphore:
                 try:
                     result = await checker.check(brand.website)
@@ -565,8 +646,8 @@ class Pipeline:
         ) as progress:
             task = progress.add_task(f"[cyan]Checking {len(brands_with_website)} websites...", total=len(brands_with_website))
 
-            # Run all checks in parallel (limited by semaphore)
-            tasks = [check_brand(brand, progress, task) for brand in brands_with_website]
+            # Run checks with staggered starts to avoid CDN rate limits
+            tasks = [check_brand(brand, i, progress, task) for i, brand in enumerate(brands_with_website)]
             check_results = await asyncio.gather(*tasks)
 
         # Collect results
@@ -596,6 +677,21 @@ class Pipeline:
 
         return ecommerce_brands
 
+    @staticmethod
+    def _parse_employee_count(value) -> Optional[int]:
+        """Parse employee count from various formats (int, string range, etc.)."""
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            # Handle ranges like "201-500" or "1001-5000"
+            match = re.search(r'(\d+)\s*[-–]\s*(\d+)', value)
+            if match:
+                return int(match.group(2))  # Use upper bound
+            match = re.search(r'(\d+)', value)
+            if match:
+                return int(match.group(1))
+        return None
+
     def _categorize_contact(self, title: str) -> str:
         """Categorize a contact by their title."""
         title_lower = title.lower()
@@ -610,7 +706,7 @@ class Pipeline:
         else:
             return "Other"
 
-    async def stage_4_enrich(self, brands: list[BrandGroup]) -> list[dict]:
+    async def stage_4_enrich(self, brands: list[BrandGroup], linkedin_enricher=None) -> list[dict]:
         """Enrich brands with contact data using configured provider."""
         provider = settings.enrichment.provider
         self._show_stage_header(4, f"Contact Enrichment ({provider.title()})", "Finding company pages and executive contacts")
@@ -628,7 +724,7 @@ class Pipeline:
                 return []
             return await self._enrich_with_apollo(brands)
         else:
-            return await self._enrich_with_linkedin(brands)
+            return await self._enrich_with_linkedin(brands, linkedin_enricher=linkedin_enricher)
 
     async def _enrich_with_apollo(self, brands: list[BrandGroup]) -> list[dict]:
         """Enrich using Apollo.io API."""
@@ -750,9 +846,9 @@ class Pipeline:
 
         return enriched
 
-    async def _enrich_with_linkedin(self, brands: list[BrandGroup]) -> list[dict]:
+    async def _enrich_with_linkedin(self, brands: list[BrandGroup], linkedin_enricher=None) -> list[dict]:
         """Enrich using LinkedIn page scraping."""
-        enricher = LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
+        enricher = linkedin_enricher or LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
         enriched = []
 
         stats = {
@@ -764,22 +860,28 @@ class Pipeline:
             "other": 0,
         }
 
-        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via LinkedIn page scraping[/dim]")
+        concurrency = settings.enrichment.concurrency
+        semaphore = asyncio.Semaphore(concurrency)
+        request_interval = 0.5  # Stagger start times
+
+        console.print(f"  [dim]• Enriching {len(brands)} qualified leads via LinkedIn page scraping ({concurrency} parallel)[/dim]")
+
+        # Report JS rendering availability
+        if enricher._browser_context:
+            console.print(f"  [green]✓ Playwright browser active[/green]")
+        elif await enricher._check_flaresolverr():
+            console.print(f"  [green]✓ FlareSolverr connected[/green]")
+        else:
+            console.print(f"  [yellow]⚠ No JS renderer available — LinkedIn scraping will be limited (DDG fallback only)[/yellow]")
         console.print()
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]Enriching...", total=len(brands))
+        async def enrich_brand(brand: BrandGroup, idx: int, progress, task) -> Optional[dict]:
+            """Enrich a single brand with semaphore concurrency control."""
+            # Stagger starts to avoid burst requests
+            await asyncio.sleep(idx * request_interval + random.uniform(0, 0.3))
 
-            for brand in brands:
+            async with semaphore:
                 brand_name = brand.normalized_name.title()
-                progress.update(task, description=f"[cyan]Searching[/cyan] {brand_name}")
 
                 try:
                     # Step 1: Find LinkedIn company URL
@@ -789,24 +891,28 @@ class Pipeline:
                     contacts = []
 
                     if linkedin_url:
-                        stats["linkedin_pages_found"] += 1
-
-                        # Step 2: Scrape the company page directly
+                        # Step 2: Scrape the company page for org data
                         linkedin_data = await enricher.scrape_company_page(linkedin_url)
-                        contacts = linkedin_data.people[:4] if linkedin_data.people else []
 
-                    # Track contact stats
-                    for contact in contacts:
-                        category = self._categorize_contact(contact.title)
-                        stats["total_contacts"] += 1
-                        if category == "C-Suite":
-                            stats["c_suite"] += 1
-                        elif category == "Executive":
-                            stats["executive"] += 1
-                        elif category == "Management":
-                            stats["management"] += 1
-                        else:
-                            stats["other"] += 1
+                    # Step 3: Find contacts (people page scrape → DDG fallback)
+                    contacts = await enricher.find_contacts(
+                        brand.normalized_name, linkedin_url=linkedin_url, max_contacts=4
+                    )
+
+                    # Merge any company-page people not already found
+                    if linkedin_data and linkedin_data.people:
+                        existing_slugs = set()
+                        for c in contacts:
+                            slug_m = re.search(r'/in/([\w-]+)', c.linkedin_url)
+                            if slug_m:
+                                existing_slugs.add(slug_m.group(1))
+                        for person in linkedin_data.people:
+                            if len(contacts) >= 4:
+                                break
+                            slug_m = re.search(r'/in/([\w-]+)', person.linkedin_url)
+                            if slug_m and slug_m.group(1) not in existing_slugs:
+                                contacts.append(person)
+                                existing_slugs.add(slug_m.group(1))
 
                     # Extract unique addresses from locations
                     addresses = []
@@ -846,20 +952,53 @@ class Pipeline:
                             row[f"contact_{i+1}_phone"] = ""
                             row[f"contact_{i+1}_linkedin"] = ""
 
-                    enriched.append(row)
-
                     if contacts:
                         progress.update(task, description=f"[green]✓[/green] {brand_name}: {len(contacts)} contacts")
                     else:
                         progress.update(task, description=f"[yellow]○[/yellow] {brand_name}: No data found")
 
-                    await asyncio.sleep(1.0)
+                    return row, linkedin_url is not None, contacts
                 except RuntimeError:
-                    raise  # Re-raise credit exhaustion
+                    raise
                 except Exception as e:
                     console.print(f"  [red]✗ Error enriching {brand_name}: {e}[/red]")
+                    return None
+                finally:
+                    progress.advance(task)
 
-                progress.advance(task)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Enriching...", total=len(brands))
+
+            results = await asyncio.gather(
+                *[enrich_brand(brand, idx, progress, task) for idx, brand in enumerate(brands)],
+                return_exceptions=True,
+            )
+
+        for result in results:
+            if result is None or isinstance(result, Exception):
+                continue
+            row, found_linkedin, contacts = result
+            enriched.append(row)
+            if found_linkedin:
+                stats["linkedin_pages_found"] += 1
+            for contact in contacts:
+                category = self._categorize_contact(contact.title)
+                stats["total_contacts"] += 1
+                if category == "C-Suite":
+                    stats["c_suite"] += 1
+                elif category == "Executive":
+                    stats["executive"] += 1
+                elif category == "Management":
+                    stats["management"] += 1
+                else:
+                    stats["other"] += 1
 
         # Summary
         console.print()
@@ -873,7 +1012,7 @@ class Pipeline:
 
         return enriched
 
-    async def stage_4b_quality_gate(self, enriched: list[dict]) -> list[dict]:
+    async def stage_4b_quality_gate(self, enriched: list[dict], linkedin_enricher=None) -> list[dict]:
         """Filter leads using Apollo/LinkedIn data and supplement contacts."""
         self._show_stage_header("4b", "Quality Gate", "Verifying chain sizes and supplementing contacts")
 
@@ -883,7 +1022,7 @@ class Pipeline:
 
         max_locations = settings.quality_gate_max_locations
         max_employees = settings.quality_gate_max_employees
-        enricher = LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
+        enricher = linkedin_enricher or LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
 
         console.print(f"  [dim]• Checking {len(enriched)} leads[/dim]")
         console.print(f"  [dim]• Max locations: {max_locations}, Max employees: {max_employees}[/dim]")
@@ -904,43 +1043,58 @@ class Pipeline:
                 filtered_count += 1
                 continue
 
-            # Signal 2: LinkedIn company page (only if Apollo location count is null)
+            # Signal 2: LinkedIn company page location count
+            # (already fetched in stage 4 and stored as apollo_location_count)
+            # Only re-scrape if we have a LinkedIn URL but no location data yet
             linkedin_data = None
             if apollo_locs is None and linkedin_url:
-                try:
-                    linkedin_data = await enricher.scrape_company_page(linkedin_url)
-
-                    if linkedin_data.location_count and linkedin_data.location_count > max_locations:
-                        console.print(f"  [red]✗ Filtered:[/red] {brand_name} — LinkedIn says {linkedin_data.location_count} locations")
-                        filtered_count += 1
-                        continue
-                except Exception:
-                    pass  # LinkedIn scrape failed, continue with other signals
+                # Check if employee data already hints at location count
+                # Only re-scrape if we have zero data from stage 4
+                if not employee_count:
+                    try:
+                        linkedin_data = await enricher.scrape_company_page(linkedin_url)
+                        if linkedin_data.location_count and linkedin_data.location_count > max_locations:
+                            console.print(f"  [red]✗ Filtered:[/red] {brand_name} — LinkedIn says {linkedin_data.location_count} locations")
+                            filtered_count += 1
+                            continue
+                    except Exception:
+                        pass
 
             # Signal 3: Employee count heuristic
-            if apollo_locs is None and employee_count and isinstance(employee_count, (int, float)) and employee_count > max_employees:
-                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — {int(employee_count)} employees (likely large chain)")
+            parsed_employees = self._parse_employee_count(employee_count)
+            if apollo_locs is None and parsed_employees and parsed_employees > max_employees:
+                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — {parsed_employees} employees (likely large chain)")
                 filtered_count += 1
                 continue
 
             # Lead passed quality gate - supplement contacts from LinkedIn if available
-            # If we didn't scrape LinkedIn yet (Apollo data was present), scrape now for contacts
-            if linkedin_data is None and linkedin_url:
-                has_empty_slot = any(not lead.get(f"contact_{i}_name") for i in range(1, 5))
-                if has_empty_slot:
-                    try:
-                        linkedin_data = await enricher.scrape_company_page(linkedin_url)
-                    except Exception:
-                        pass
-
-            if linkedin_data and linkedin_data.people:
-                # Find empty contact slots and fill them
-                for i in range(1, 5):
-                    if not lead.get(f"contact_{i}_name"):
-                        # Find next LinkedIn person not already in contacts
-                        existing_names = {lead.get(f"contact_{j}_name", "").lower() for j in range(1, 5)}
+            has_empty_slot = any(not lead.get(f"contact_{i}_name") for i in range(1, 5))
+            if has_empty_slot and linkedin_url:
+                try:
+                    # Use find_contacts() which tries people page scrape then DDG fallback
+                    supplement_contacts = await enricher.find_contacts(
+                        brand_name, linkedin_url=linkedin_url, max_contacts=4
+                    )
+                    # Also merge company page people if available
+                    if linkedin_data and linkedin_data.people:
+                        existing_slugs = {
+                            re.search(r'/in/([\w-]+)', c.linkedin_url).group(1)
+                            for c in supplement_contacts
+                            if re.search(r'/in/([\w-]+)', c.linkedin_url)
+                        }
                         for person in linkedin_data.people:
-                            if person.name.lower() not in existing_names:
+                            slug_m = re.search(r'/in/([\w-]+)', person.linkedin_url)
+                            if slug_m and slug_m.group(1) not in existing_slugs:
+                                supplement_contacts.append(person)
+                                existing_slugs.add(slug_m.group(1))
+
+                    # Fill empty contact slots
+                    existing_names = {lead.get(f"contact_{j}_name", "").lower() for j in range(1, 5)}
+                    for person in supplement_contacts:
+                        if person.name.lower() in existing_names:
+                            continue
+                        for i in range(1, 5):
+                            if not lead.get(f"contact_{i}_name"):
                                 lead[f"contact_{i}_name"] = person.name
                                 lead[f"contact_{i}_title"] = person.title
                                 lead[f"contact_{i}_linkedin"] = person.linkedin_url or ""
@@ -950,6 +1104,8 @@ class Pipeline:
                                     lead[f"contact_{i}_phone"] = ""
                                 existing_names.add(person.name.lower())
                                 break
+                except Exception:
+                    pass
 
             passed.append(lead)
             console.print(f"  [green]✓ Passed:[/green] {brand_name}")
@@ -1356,22 +1512,33 @@ class Pipeline:
 
         # Stage 4: Contact enrichment (Apollo or LinkedIn) — skip if disabled
         if settings.enrichment.enabled:
-            if start_stage < 4:
-                enriched = await self.stage_4_enrich(ecommerce_brands)
-                checkpoint.enriched = enriched
-                checkpoint.stage = 4
-                self._save_checkpoint(checkpoint)
-                console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
-            else:
-                console.print(f"  [dim]⏭ Skipping Stage 4 (Enrichment) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
+            # Create shared LinkedIn enricher with Playwright browser for stages 4 + 4b
+            linkedin_enricher = LinkedInEnricher(
+                flaresolverr_url=settings.flaresolverr_url or None,
+                cookie_file=settings.enrichment.cookie_file or None,
+            )
+            try:
+                if settings.enrichment.use_playwright:
+                    await linkedin_enricher.start_browser()
 
-            # Stage 4b: Quality gate
-            if start_stage < 4.5:
-                enriched = await self.stage_4b_quality_gate(enriched)
-                checkpoint.enriched = enriched
-                checkpoint.stage = 4.5
-                self._save_checkpoint(checkpoint)
-                console.print(f"  [dim]💾 Checkpoint saved (Stage 4b complete)[/dim]")
+                if start_stage < 4:
+                    enriched = await self.stage_4_enrich(ecommerce_brands, linkedin_enricher=linkedin_enricher)
+                    checkpoint.enriched = enriched
+                    checkpoint.stage = 4
+                    self._save_checkpoint(checkpoint)
+                    console.print(f"  [dim]💾 Checkpoint saved (Stage 4 complete)[/dim]")
+                else:
+                    console.print(f"  [dim]⏭ Skipping Stage 4 (Enrichment) - loaded {len(enriched)} enriched leads from checkpoint[/dim]")
+
+                # Stage 4b: Quality gate
+                if start_stage < 4.5:
+                    enriched = await self.stage_4b_quality_gate(enriched, linkedin_enricher=linkedin_enricher)
+                    checkpoint.enriched = enriched
+                    checkpoint.stage = 4.5
+                    self._save_checkpoint(checkpoint)
+                    console.print(f"  [dim]💾 Checkpoint saved (Stage 4b complete)[/dim]")
+            finally:
+                await linkedin_enricher.close_browser()
         else:
             # Skip enrichment — convert brands to export format directly
             console.print(f"\n  [dim]⏭ Skipping Stage 4 & 4b (Enrichment disabled)[/dim]")
