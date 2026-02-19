@@ -185,7 +185,7 @@ def _show_settings_overview():
         table.add_column("Value", style="green")
 
         # API Keys (masked)
-        table.add_row("1", "Google Places API", "✓ Set" if settings.google_places_api_key else "✗ Not set")
+        table.add_row("1", "SerpAPI Key", "✓ Set" if settings.serpapi_api_key else "✗ Not set")
         table.add_row("2", "Firecrawl API", "✓ Set" if settings.firecrawl_api_key else "✗ Not set")
         table.add_row("3", "OpenAI API", "✓ Set" if settings.openai_api_key else "✗ Not set")
         table.add_row("4", "Apollo API", "✓ Set" if settings.apollo_api_key else "✗ Not set")
@@ -385,15 +385,13 @@ def _show_api_help():
         "[bold]API Key Setup[/bold]\n\n"
         "Create a [cyan].env[/cyan] file in the lead-generator directory with:\n\n"
         "[dim]# Required[/dim]\n"
-        "GOOGLE_PLACES_API_KEY=your_key\n"
-        "FIRECRAWL_API_KEY=your_key\n\n"
+        "SERPAPI_API_KEY=your_key\n\n"
         "[dim]# Optional[/dim]\n"
         "OPENAI_API_KEY=your_key      [dim]# For LLM disambiguation[/dim]\n"
         "ANTHROPIC_API_KEY=your_key   [dim]# For outreach generation with Claude[/dim]\n"
         "APOLLO_API_KEY=your_key      [dim]# For paid enrichment[/dim]\n\n"
         "[bold]Get API keys:[/bold]\n"
-        "• Google Places: [link]https://console.cloud.google.com/[/link]\n"
-        "• Firecrawl: [link]https://firecrawl.dev/[/link]\n"
+        "• SerpAPI: [link]https://serpapi.com/[/link]\n"
         "• OpenAI: [link]https://platform.openai.com/[/link]\n"
         "• Anthropic: [link]https://console.anthropic.com/[/link]\n"
         "• Apollo: [link]https://app.apollo.io/[/link]",
@@ -469,6 +467,30 @@ def _interactive_new_run():
 
     # Normalize
     country_list = ["canada" if c == "ca" else c for c in country_list]
+
+    # Step 2b: Search mode
+    console.print("\n[bold cyan]Step 2b:[/bold cyan] Search scope\n")
+
+    mode_choice = inquirer.select(
+        message="Select search mode:",
+        choices=[
+            {"name": "Lean \u2014 ~50 major cities, 3-4 queries/vertical (budget-friendly)", "value": "lean"},
+            {"name": "Extended \u2014 all 890+ cities, full query lists (comprehensive)", "value": "extended"},
+            Separator(),
+            {"name": BACK_OPTION, "value": "back"},
+            {"name": MAIN_MENU_OPTION, "value": "main_menu"},
+        ],
+        default="lean",
+    ).execute()
+
+    if mode_choice == "main_menu":
+        nav.clear()
+        return
+    if mode_choice == "back":
+        nav.clear()
+        return _interactive_new_run()
+
+    settings.search_mode = mode_choice
 
     # Step 3: Advanced settings
     console.print("\n[bold cyan]Step 3:[/bold cyan] Advanced settings\n")
@@ -549,7 +571,7 @@ def _interactive_new_run():
 
     try:
         pipeline = Pipeline()
-        output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list))
+        output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list, search_mode=mode_choice))
 
         console.print()
         console.print(Panel(
@@ -1764,6 +1786,9 @@ def show_summary(verticals: list[str], countries: list[str]):
     table.add_column("Setting", style="cyan", no_wrap=True)
     table.add_column("Value", style="green")
 
+    # Search mode
+    table.add_row("Search Mode", settings.search_mode.capitalize())
+
     # Verticals - from actual selection
     vertical_names = [VERTICALS.get(v, v).split(" (")[0] for v in verticals]
     table.add_row("Verticals", ", ".join(vertical_names))
@@ -1772,22 +1797,23 @@ def show_summary(verticals: list[str], countries: list[str]):
     country_names = [COUNTRIES.get(c, c).split(" (")[0] for c in countries]
     table.add_row("Countries", ", ".join(country_names))
 
-    # Calculate actual cities from config
+    # Calculate cities and queries based on mode
+    mode_cities = settings.get_cities_for_mode()
     cities = []
     for country in countries:
-        cities.extend(settings.cities.get(country, []))
+        cities.extend(mode_cities.get(country, []))
     cities_count = len(cities)
 
-    # Calculate actual queries from config
+    mode_queries = settings.get_queries_for_mode()
     queries = []
     for vertical in verticals:
-        queries.extend(settings.search_queries.get(vertical, []))
+        queries.extend(mode_queries.get(vertical, []))
     queries_count = len(queries)
 
     total_searches = cities_count * queries_count
     table.add_row("Cities", str(cities_count))
     table.add_row("Queries per city", str(queries_count))
-    table.add_row("Est. API Calls", f"~{total_searches}")
+    table.add_row("Est. SerpAPI Calls", f"~{total_searches}")
 
     # Enrichment settings
     if settings.enrichment.enabled:
@@ -1849,6 +1875,11 @@ def run(
         "--include-risky/--no-include-risky",
         help="Include catch-all/unknown emails"
     ),
+    mode: str = typer.Option(
+        "lean",
+        "--mode", "-m",
+        help="Search mode: lean (~50 cities, 3-4 queries) or extended (all cities, full queries)"
+    ),
 ):
     """Run the full lead generation pipeline."""
     show_banner()
@@ -1873,6 +1904,12 @@ def run(
 
     if include_risky is not None:
         settings.email_verification.include_risky = include_risky
+
+    # Apply search mode
+    if mode not in ("lean", "extended"):
+        console.print(f"[red]Invalid search mode: {mode}. Use 'lean' or 'extended'.[/red]")
+        raise typer.Exit(1)
+    settings.search_mode = mode
 
     # Initialize pipeline to check for checkpoints
     pipeline = Pipeline()
@@ -1948,6 +1985,20 @@ def run(
 
         country_list = country_choices
 
+        # Interactive search mode selection
+        console.print("\n[bold cyan]Search Mode:[/bold cyan]\n")
+
+        mode = inquirer.select(
+            message="Select search mode:",
+            choices=[
+                {"name": "Lean \u2014 ~50 major cities, 3-4 queries/vertical (budget-friendly)", "value": "lean"},
+                {"name": "Extended \u2014 all 890+ cities, full query lists (comprehensive)", "value": "extended"},
+            ],
+            default="lean",
+        ).execute()
+
+        settings.search_mode = mode
+
         # Interactive advanced settings
         console.print("\n[bold cyan]Step 3:[/bold cyan] Advanced settings\n")
 
@@ -2017,7 +2068,7 @@ def run(
     console.print("[dim]Press Ctrl+C to interrupt[/dim]\n")
 
     try:
-        output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list))
+        output_file = asyncio.run(pipeline.run(verticals=vertical_list, countries=country_list, search_mode=mode))
 
         # Final summary
         console.print()
