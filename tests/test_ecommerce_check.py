@@ -336,3 +336,43 @@ def test_spa_trigger_skips_content_rich_pages():
     # Page with substantial text content (not a SPA shell)
     html = '<html><head></head><body>' + '<p>Lorem ipsum dolor sit amet. </p>' * 200 + '</body></html>'
     assert checker._should_try_playwright(html, platform=None, score=0) is False
+
+
+@pytest.mark.asyncio
+async def test_playwright_fallback_triggered_for_spa():
+    """check() should use Playwright fallback for SPA sites with no signals."""
+    checker = EcommerceChecker(playwright_fallback_enabled=True, playwright_timeout=15)
+
+    # SPA shell with no e-commerce signals
+    spa_html = '<html><head></head><body><div id="__next"></div><script src="/_next/static/chunks/main.js"></script></body></html>'
+    # Rendered HTML with Shopify signals
+    rendered_html = '<html><body><div id="__next"><button class="add-to-cart">Add to Cart</button><script src="https://cdn.shopify.com/s/files/1/theme.js"></script></div></body></html>'
+
+    mock_headers = httpx.Headers({"content-type": "text/html"})
+
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = ([spa_html], None, [mock_headers])
+        with patch.object(checker, '_playwright_fetch', new_callable=AsyncMock) as mock_pw:
+            mock_pw.return_value = rendered_html
+
+            result = await checker.check("https://spa-store.com")
+
+            mock_pw.assert_called_once()
+            assert result.has_ecommerce is True
+            assert result.platform == "shopify"
+
+
+@pytest.mark.asyncio
+async def test_playwright_fallback_not_triggered_when_disabled():
+    """check() should skip Playwright when disabled."""
+    checker = EcommerceChecker(playwright_fallback_enabled=False)
+
+    spa_html = '<html><head></head><body><div id="__next"></div><script src="/_next/static/chunks/main.js"></script></body></html>'
+    mock_headers = httpx.Headers({"content-type": "text/html"})
+
+    with patch.object(checker, '_fetch_site_pages', new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = ([spa_html], None, [mock_headers])
+
+        result = await checker.check("https://spa-store.com")
+
+        assert result.has_ecommerce is False

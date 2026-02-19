@@ -589,7 +589,9 @@ class Pipeline:
 
         concurrency = settings.ecommerce_concurrency
         checker = EcommerceChecker(
-            pages_to_check=settings.ecommerce_pages_to_check
+            pages_to_check=settings.ecommerce_pages_to_check,
+            playwright_fallback_enabled=settings.ecommerce_playwright_fallback_enabled,
+            playwright_timeout=settings.ecommerce_playwright_fallback_timeout,
         )
         semaphore = asyncio.Semaphore(concurrency)
         # Rate limiter: allow max N requests per second to avoid CDN-level 429s

@@ -194,8 +194,12 @@ class EcommerceChecker:
         r'chunk\.js',
     ]
 
-    def __init__(self, pages_to_check: int = None, **kwargs):
+    def __init__(self, pages_to_check: int = None, playwright_fallback_enabled: bool = False, playwright_timeout: int = 15, **kwargs):
         self.pages_to_check = pages_to_check or self.DEFAULT_PAGES_TO_CHECK
+        self.playwright_fallback_enabled = playwright_fallback_enabled
+        self.playwright_timeout = playwright_timeout
+        self._playwright_count = 0
+        self._total_checked = 0
 
     async def _fetch_page(self, url: str, client: httpx.AsyncClient) -> tuple[Optional[str], Optional[str], Optional[httpx.Headers]]:
         """Fetch a single page's HTML with retries. Returns (html, error_reason, headers)."""
@@ -428,6 +432,24 @@ class EcommerceChecker:
 
         return True
 
+    async def _playwright_fetch(self, url: str) -> Optional[str]:
+        """Fetch a page using Playwright for JS rendering. Returns rendered HTML."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return None
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.goto(url, wait_until="networkidle", timeout=self.playwright_timeout * 1000)
+                html = await page.content()
+                await browser.close()
+                return html
+        except Exception:
+            return None
+
     def _count_indicators(self, content: str) -> tuple[list[str], int]:
         """Count e-commerce indicators in content."""
         content_lower = content.lower()
@@ -493,6 +515,7 @@ class EcommerceChecker:
         if not url.startswith(('http://', 'https://')):
             url = f"https://{url}"
         base_url = url.rstrip('/')
+        self._total_checked += 1
 
         # Fetch pages directly via HTTP
         page_contents, fail_reason, page_headers = await self._fetch_site_pages(base_url)
@@ -564,6 +587,39 @@ class EcommerceChecker:
             if has_offer:
                 all_indicators.append("jsonld:Offer")
                 total_score += 2
+
+        # Playwright fallback for SPA sites
+        if (
+            self.playwright_fallback_enabled
+            and page_contents
+            and not platform
+            and total_score == 0
+            and self._should_try_playwright(page_contents[0], platform, total_score)
+        ):
+            max_pw = max(1, int(self._total_checked * 0.2))
+            if self._playwright_count < max_pw:
+                self._playwright_count += 1
+                rendered_html = await self._playwright_fetch(base_url)
+                if rendered_html:
+                    # Re-analyze rendered content
+                    platform = self._detect_platform(rendered_html)
+                    if not platform:
+                        meta_result = self._detect_from_meta_tags(rendered_html)
+                        if meta_result and meta_result != "product_page":
+                            platform = meta_result
+
+                    pw_indicators, pw_score = self._count_indicators(rendered_html)
+                    all_indicators.extend(pw_indicators)
+                    total_score += pw_score
+
+                    pw_marketplaces, pw_links = self._detect_marketplaces(rendered_html)
+                    all_marketplaces.update(pw_marketplaces)
+                    for mp, link in pw_links.items():
+                        if mp not in all_marketplace_links:
+                            all_marketplace_links[mp] = link
+
+                    all_indicators.append("playwright_fallback")
+                    pages_checked += 1
 
         # Calculate final result
         # Require either: a detected platform, OR a payment/price signal + action patterns,
