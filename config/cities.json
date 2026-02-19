@@ -1196,5 +1196,13 @@
   },
   "health_check": {
     "concurrency": 50
+  },
+  "discovery": {
+    "nearby_grid": {
+      "enabled": true,
+      "offset_km": 20,
+      "radius_meters": 15000,
+      "points": "cardinal"
+    }
   }
 }

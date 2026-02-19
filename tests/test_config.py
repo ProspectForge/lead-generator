@@ -37,3 +37,13 @@ def test_settings_loads_health_check_config():
     settings = Settings()
 
     assert settings.health_check_concurrency == 50
+
+def test_discovery_settings_loaded():
+    """Discovery nearby grid settings should load from config."""
+    from src.config import Settings
+    s = Settings()
+    assert hasattr(s, 'discovery')
+    assert s.discovery.nearby_grid_enabled is True
+    assert s.discovery.nearby_grid_offset_km == 20
+    assert s.discovery.nearby_grid_radius_meters == 15000
+    assert s.discovery.nearby_grid_points == "cardinal"

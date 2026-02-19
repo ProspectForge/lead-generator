@@ -44,6 +44,15 @@ class OutreachSettings:
 
 
 @dataclass
+class DiscoverySettings:
+    """Settings for discovery nearby grid search."""
+    nearby_grid_enabled: bool = True
+    nearby_grid_offset_km: int = 20
+    nearby_grid_radius_meters: int = 15000
+    nearby_grid_points: str = "cardinal"  # "cardinal" (5 points) or "full" (9 points)
+
+
+@dataclass
 class Settings:
     google_places_api_key: str = ""
     firecrawl_api_key: str = ""  # Legacy, no longer used
@@ -65,6 +74,7 @@ class Settings:
     quality_gate_max_locations: int = 10
     quality_gate_max_employees: int = 500
     health_check_concurrency: int = 10
+    discovery: DiscoverySettings = field(default_factory=DiscoverySettings)
 
     def __post_init__(self):
         self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
@@ -132,6 +142,16 @@ class Settings:
         # Load health check settings
         health_check_config = config.get("health_check", {})
         self.health_check_concurrency = health_check_config.get("concurrency", 10)
+
+        # Load discovery settings
+        discovery_config = config.get("discovery", {})
+        nearby_grid = discovery_config.get("nearby_grid", {})
+        self.discovery = DiscoverySettings(
+            nearby_grid_enabled=nearby_grid.get("enabled", True),
+            nearby_grid_offset_km=nearby_grid.get("offset_km", 20),
+            nearby_grid_radius_meters=nearby_grid.get("radius_meters", 15000),
+            nearby_grid_points=nearby_grid.get("points", "cardinal"),
+        )
 
     def get_all_city_names(self) -> list[str]:
         """Returns all city names (just the city part, without state/province)."""
