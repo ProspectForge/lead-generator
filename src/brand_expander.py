@@ -1,98 +1,63 @@
 # src/brand_expander.py
-import asyncio
-from urllib.parse import urlparse
-from src.places_search import PlacesSearcher, PlaceResult
+"""Expand discovered brands by scraping their website for store locations.
+
+Instead of burning SerpAPI searches to find a brand in every city,
+we scrape the brand's own website for their store locator page.
+Zero API cost.
+"""
+from pathlib import Path
+from typing import Optional
+from src.location_scraper import LocationScraper
+
 
 class BrandExpander:
-    """Expands discovered brands to find all their locations."""
+    """Expands discovered brands by scraping their website for all locations."""
 
-    def __init__(self, api_key: str, concurrency: int = 5):
-        self.searcher = PlacesSearcher(api_key=api_key)
-        self.concurrency = concurrency
-        self.delay_ms = 100
-
-    def _normalize_domain(self, url: str) -> str:
-        """Extract domain from URL for comparison."""
-        if not url:
-            return ""
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-        try:
-            parsed = urlparse(url)
-            domain = parsed.netloc.lower()
-            if domain.startswith("www."):
-                domain = domain[4:]
-            return domain
-        except Exception:
-            return ""
-
-    def _same_domain(self, url1: str, url2: str) -> bool:
-        """Check if two URLs have the same domain."""
-        d1 = self._normalize_domain(url1)
-        d2 = self._normalize_domain(url2)
-        return d1 and d2 and d1 == d2
+    def __init__(self, cache_dir: Optional[Path] = None, **kwargs):
+        # Accept and ignore api_key/concurrency for backwards compat during transition
+        self.scraper = LocationScraper(cache_dir=cache_dir)
 
     async def expand_brand(
         self,
         brand_name: str,
         known_website: str,
-        cities: list[str],
-        vertical: str = ""
+        vertical: str = "",
+        **kwargs,
     ) -> list[dict]:
-        """Search for a brand across all cities and return matching locations."""
-        semaphore = asyncio.Semaphore(self.concurrency)
-        all_results = []
+        """Find all locations for a brand by scraping their website.
 
-        async def search_city(city: str) -> list[dict]:
-            async with semaphore:
-                try:
-                    results = await self.searcher.search(brand_name, city, vertical=vertical)
-                    # Filter to only matching domain
-                    matching = []
-                    for r in results:
-                        if self._same_domain(r.website, known_website):
-                            matching.append({
-                                "name": r.name,
-                                "address": r.address,
-                                "website": r.website,
-                                "place_id": r.place_id,
-                                "city": r.city,
-                                "vertical": r.vertical,
-                                "source": "brand_expansion"
-                            })
-                    await asyncio.sleep(self.delay_ms / 1000)
-                    return matching
-                except Exception:
-                    return []
+        Returns list of dicts matching pipeline format, or [] if no locations found.
+        """
+        if not known_website:
+            return []
 
-        # Run searches in parallel
-        tasks = [search_city(city) for city in cities]
-        results_lists = await asyncio.gather(*tasks)
+        locations = await self.scraper.scrape(known_website)
 
-        # Flatten
-        for result_list in results_lists:
-            all_results.extend(result_list)
+        return [
+            {
+                "name": loc.get("name") or brand_name,
+                "address": loc.get("address", ""),
+                "website": known_website,
+                "place_id": None,
+                "city": loc.get("city", ""),
+                "vertical": vertical,
+                "source": "location_scrape",
+            }
+            for loc in locations
+        ]
 
-        return all_results
-
+    @staticmethod
     def should_expand(
-        self,
         brand_name: str,
         cities_found: list[str],
         location_count: int,
-        from_scrape: bool = False
+        from_scrape: bool = False,
     ) -> bool:
-        """Determine if a brand should be expanded to all cities."""
-        # Expand if found via scraping (franchise directory, etc.)
+        """Determine if a brand should be expanded."""
         if from_scrape:
             return True
-
-        # Expand if found in 2+ cities
         if len(cities_found) >= 2:
             return True
-
-        # Expand if 3+ locations in a single city
         if location_count >= 3:
             return True
-
         return False
