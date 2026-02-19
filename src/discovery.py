@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from src.places_search import PlacesSearcher
+from src.geocoder import CityGeocoder
 from src.brand_expander import BrandExpander
 from src.deduplicator import Deduplicator, MergedPlace
 from src.scraper.bestof_scraper import BestOfScraper
@@ -53,6 +54,12 @@ class Discovery:
         gp_results = await self._run_google_places(verticals, countries)
         all_places.extend(gp_results)
         console.print(f"  [green]Found {len(gp_results)} places from Google[/green]")
+
+        # Stage 1b: Nearby grid search
+        console.print("[bold cyan]Discovery Stage 1b:[/bold cyan] Nearby Grid Search")
+        grid_results = await self._run_nearby_grid_search(verticals, countries)
+        all_places.extend(grid_results)
+        console.print(f"  [green]Found {len(grid_results)} places from grid search[/green]")
 
         # Stage 2: Web scraping
         console.print("[bold cyan]Discovery Stage 2:[/bold cyan] Web Scraping")
@@ -143,6 +150,90 @@ class Discovery:
             coros = []
             for city, query, vertical in tasks:
                 coros.append(search(city, query, vertical))
+
+            for coro in asyncio.as_completed(coros):
+                result = await coro
+                results.extend(result)
+                progress.advance(task)
+
+        return results
+
+    async def _run_nearby_grid_search(
+        self,
+        verticals: list[str],
+        countries: list[str]
+    ) -> list[dict]:
+        """Run nearby search at grid points around each city for suburb coverage."""
+        if not self.settings.discovery.nearby_grid_enabled:
+            return []
+
+        results = []
+        semaphore = asyncio.Semaphore(self.settings.search_concurrency)
+        cities = self._build_city_list(countries)
+
+        # Geocode all cities
+        geocoder = CityGeocoder(api_key=self.settings.google_places_api_key)
+        city_coords = await geocoder.geocode_batch(cities)
+
+        if not city_coords:
+            console.print("  [yellow]No city coordinates available, skipping grid search[/yellow]")
+            return []
+
+        offset_km = self.settings.discovery.nearby_grid_offset_km
+        radius = self.settings.discovery.nearby_grid_radius_meters
+        grid_mode = self.settings.discovery.nearby_grid_points
+
+        # Build search tasks: (lat, lng, types, vertical, city)
+        tasks = []
+        for city, (lat, lng) in city_coords.items():
+            grid_points = PlacesSearcher.generate_grid_points(lat, lng, offset_km, grid_mode)
+            for point_lat, point_lng in grid_points:
+                for vertical in verticals:
+                    types = PlacesSearcher.RETAIL_TYPES.get(vertical, [])
+                    if types:
+                        tasks.append((point_lat, point_lng, types, vertical, city))
+
+        console.print(f"  [dim]• {len(city_coords)} geocoded cities × grid points × {len(verticals)} verticals = {len(tasks)} nearby searches[/dim]")
+
+        async def search(lat: float, lng: float, types: list[str], vertical: str, city: str) -> list[dict]:
+            async with semaphore:
+                try:
+                    places = await self.searcher.nearby_search(
+                        latitude=lat,
+                        longitude=lng,
+                        radius_meters=radius,
+                        included_types=types,
+                        vertical=vertical
+                    )
+                    return [
+                        {
+                            "name": p.name,
+                            "address": p.address,
+                            "website": p.website,
+                            "place_id": p.place_id,
+                            "city": p.city or city,
+                            "vertical": p.vertical,
+                            "source": "nearby_grid"
+                        }
+                        for p in places
+                    ]
+                except Exception as e:
+                    if not _is_transient_error(e):
+                        logger.warning("Nearby grid search failed at (%s, %s): %s", lat, lng, e)
+                    return []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Grid searching {len(tasks)} points...", total=len(tasks))
+
+            coros = []
+            for lat, lng, types, vertical, city in tasks:
+                coros.append(search(lat, lng, types, vertical, city))
 
             for coro in asyncio.as_completed(coros):
                 result = await coro
