@@ -47,7 +47,7 @@ class OutreachSettings:
 class DiscoverySettings:
     """Settings for discovery nearby grid search."""
     nearby_grid_enabled: bool = True
-    nearby_grid_offset_km: int = 20
+    nearby_grid_offset_km: int = 30
     nearby_grid_radius_meters: int = 15000
     nearby_grid_points: str = "cardinal"  # "cardinal" (5 points) or "full" (9 points)
 

@@ -186,9 +186,8 @@ def _show_settings_overview():
 
         # API Keys (masked)
         table.add_row("1", "SerpAPI Key", "✓ Set" if settings.serpapi_api_key else "✗ Not set")
-        table.add_row("2", "Firecrawl API", "✓ Set" if settings.firecrawl_api_key else "✗ Not set")
-        table.add_row("3", "OpenAI API", "✓ Set" if settings.openai_api_key else "✗ Not set")
-        table.add_row("4", "Apollo API", "✓ Set" if settings.apollo_api_key else "✗ Not set")
+        table.add_row("2", "OpenAI API", "✓ Set" if settings.openai_api_key else "✗ Not set")
+        table.add_row("3", "Apollo API", "✓ Set" if settings.apollo_api_key else "✗ Not set")
 
         # Enrichment
         if settings.enrichment.enabled:
@@ -763,35 +762,65 @@ def _interactive_results():
     else:
         csv_path = csv_files[0]
 
-    df = pd.read_csv(csv_path)
-    console.print(f"\n[bold]Loaded:[/bold] {csv_path.name} ({len(df)} leads)\n")
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+    # Ensure qualified column exists (older CSVs may not have it)
+    if "qualified" not in df.columns:
+        df["qualified"] = "True"
+    if "disqualify_reason" not in df.columns:
+        df["disqualify_reason"] = ""
+
+    def _qualified_summary():
+        q = sum(1 for v in df["qualified"] if str(v).lower() == "true")
+        dq = len(df) - q
+        return f"{len(df)} leads ({q} qualified, {dq} disqualified)"
+
+    console.print(f"\n[bold]Loaded:[/bold] {csv_path.name} — {_qualified_summary()}\n")
+
+    unsaved_changes = False
 
     while True:
+        # Build menu choices
+        menu_choices = [
+            {"name": "📋 Browse leads (select to view details)", "value": "browse"},
+            {"name": "📊 View table (with contact indicators)", "value": "view"},
+            {"name": "🔍 Select columns to display", "value": "columns"},
+            {"name": "🔎 Filter by column", "value": "filter"},
+            {"name": "↕️  Sort by column", "value": "sort"},
+            {"name": "💾 Export filtered results", "value": "export"},
+            Separator(),
+            {"name": "🗑️  Delete all disqualified leads", "value": "delete_disqualified"},
+        ]
+        if unsaved_changes:
+            menu_choices.append({"name": "💾 Save changes to file", "value": "save"})
+        menu_choices.append(Separator())
+        menu_choices.append({"name": BACK_OPTION, "value": "back"})
+        menu_choices.append({"name": MAIN_MENU_OPTION, "value": "main_menu"})
+
         action = inquirer.select(
-            message="What would you like to do?",
-            choices=[
-                {"name": "📋 Browse leads (select to view details)", "value": "browse"},
-                {"name": "📊 View table (with contact indicators)", "value": "view"},
-                {"name": "🔍 Select columns to display", "value": "columns"},
-                {"name": "🔎 Filter by column", "value": "filter"},
-                {"name": "↕️  Sort by column", "value": "sort"},
-                {"name": "💾 Export filtered results", "value": "export"},
-                Separator(),
-                {"name": BACK_OPTION, "value": "back"},
-                {"name": MAIN_MENU_OPTION, "value": "main_menu"},
-            ],
+            message=f"What would you like to do? ({_qualified_summary()})",
+            choices=menu_choices,
         ).execute()
 
-        if action == "back":
-            nav.pop()
-            return "back"
-
-        if action == "main_menu":
-            nav.clear()
-            return "main_menu"
+        if action in ("back", "main_menu"):
+            if unsaved_changes:
+                save = inquirer.confirm(
+                    message="You have unsaved changes. Save before leaving?",
+                    default=True,
+                ).execute()
+                if save:
+                    df.to_csv(csv_path, index=False)
+                    console.print(f"[green]✓ Saved {len(df)} leads to {csv_path.name}[/green]")
+            if action == "back":
+                nav.pop()
+                return "back"
+            else:
+                nav.clear()
+                return "main_menu"
 
         if action == "browse":
-            _browse_leads_interactive(df)
+            changed = _browse_leads_interactive(df, csv_path)
+            if changed:
+                unsaved_changes = True
 
         elif action == "view":
             _display_leads_table(df, limit=20)
@@ -847,17 +876,39 @@ def _interactive_results():
             df.to_csv(filename, index=False)
             console.print(f"[green]✓ Exported {len(df)} leads to {filename}[/green]\n")
 
+        elif action == "delete_disqualified":
+            dq_mask = df["qualified"].astype(str).str.lower() != "true"
+            dq_count = dq_mask.sum()
+            if dq_count == 0:
+                console.print("[yellow]No disqualified leads to delete.[/yellow]")
+            else:
+                confirm = inquirer.confirm(
+                    message=f"Delete {dq_count} disqualified leads? This cannot be undone.",
+                    default=False,
+                ).execute()
+                if confirm:
+                    df = df[~dq_mask].reset_index(drop=True)
+                    unsaved_changes = True
+                    console.print(f"[green]✓ Removed {dq_count} disqualified leads. {len(df)} remaining.[/green]")
 
-def _browse_leads_interactive(df):
-    """Browse leads with arrow keys, Enter to select and view details."""
+        elif action == "save":
+            df.to_csv(csv_path, index=False)
+            unsaved_changes = False
+            console.print(f"[green]✓ Saved {len(df)} leads to {csv_path.name}[/green]")
+
+
+def _browse_leads_interactive(df, csv_path=None):
+    """Browse leads with arrow keys, Enter to select and view details. Returns True if changes were made."""
     import pandas as pd
 
+    changes_made = False
     current_page = 0
     page_size = 15
-    total_leads = len(df)
-    total_pages = (total_leads + page_size - 1) // page_size
 
     while True:
+        total_leads = len(df)
+        total_pages = max(1, (total_leads + page_size - 1) // page_size)
+        current_page = min(current_page, total_pages - 1)
         start_idx = current_page * page_size
         end_idx = min(start_idx + page_size, total_leads)
         page_df = df.iloc[start_idx:end_idx]
@@ -870,23 +921,24 @@ def _browse_leads_interactive(df):
             website = str(row.get('website', ''))[:30]
             locs = row.get('location_count', '?')
 
-            # Build fixed-width status indicators (4 chars each: icon + space)
-            # E=has emails, C=has contacts only, L=LinkedIn, P=platform
+            # Qualification indicator
+            is_qualified = str(row.get('qualified', 'True')).lower() == 'true'
+            q_flag = "✓" if is_qualified else "✗"
+
+            # Build fixed-width status indicators
             contact_count = 0
             email_count = 0
             for j in range(1, 5):
-                if pd.notna(row.get(f'contact_{j}_name')) and str(row.get(f'contact_{j}_name')).strip():
+                if str(row.get(f'contact_{j}_name', '')).strip():
                     contact_count += 1
-                    if pd.notna(row.get(f'contact_{j}_email')) and str(row.get(f'contact_{j}_email')).strip():
+                    if str(row.get(f'contact_{j}_email', '')).strip():
                         email_count += 1
 
-            # Use single-char indicators for consistent width
             e_flag = f"E{email_count}" if email_count > 0 else ("C" + str(contact_count) if contact_count > 0 else "--")
-            l_flag = "L" if pd.notna(row.get('linkedin_company')) and str(row.get('linkedin_company')).strip() else "-"
-            p_flag = "P" if pd.notna(row.get('ecommerce_platform')) and str(row.get('ecommerce_platform')).strip() else "-"
+            l_flag = "L" if str(row.get('linkedin_company', '')).strip() else "-"
+            p_flag = "P" if str(row.get('ecommerce_platform', '')).strip() else "-"
 
-            # Fixed format: [E2 L P] or [-- - -]
-            status = f"[{e_flag:>2} {l_flag} {p_flag}]"
+            status = f"[{q_flag} {e_flag:>2} {l_flag} {p_flag}]"
 
             label = f"{idx+1:3}. {status} {brand:<28} {locs:>2} locs  {website}"
             choices.append({"name": label, "value": idx})
@@ -903,7 +955,7 @@ def _browse_leads_interactive(df):
         choices.append({"name": "🔢 Jump to lead #", "value": "jump"})
         choices.append({"name": "← Back to menu", "value": "back"})
 
-        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) | [En=emails Cn=contacts L=LinkedIn P=platform][/dim]")
+        console.print(f"\n[dim]Page {current_page + 1} of {total_pages} ({total_leads} leads) | [✓/✗=qualified En=emails Cn=contacts L=LinkedIn P=platform][/dim]")
 
         selected = inquirer.select(
             message="Select a lead (↑↓ scroll, Enter to view):",
@@ -927,14 +979,20 @@ def _browse_leads_interactive(df):
                 default=1,
             ).execute()
             lead_idx = int(jump_to) - 1
-            # Jump to that lead's page and show details
             current_page = lead_idx // page_size
-            _display_lead_details(df, lead_idx, allow_navigation=True)
+            result = _display_lead_details(df, lead_idx, allow_navigation=True)
+            if isinstance(result, dict) and result.get("changed"):
+                changes_made = True
         elif isinstance(selected, int):
-            # User selected a lead - show details with navigation
-            new_idx = _display_lead_details(df, selected, allow_navigation=True)
-            # Update page to show where user ended up
-            current_page = new_idx // page_size
+            result = _display_lead_details(df, selected, allow_navigation=True)
+            if isinstance(result, dict):
+                if result.get("changed"):
+                    changes_made = True
+                current_page = result.get("last_idx", selected) // page_size
+            else:
+                current_page = (result if isinstance(result, int) else selected) // page_size
+
+    return changes_made
 
 
 def _display_leads_table(df, limit: int = 20, columns: list = None, show_contacts: bool = False, allow_selection: bool = False):
@@ -948,6 +1006,12 @@ def _display_leads_table(df, limit: int = 20, columns: list = None, show_contact
         default_cols = ["brand_name", "website", "location_count", "has_ecommerce"]
         available = [c for c in default_cols if c in df.columns]
         df_display = df[available].copy() if available else df.iloc[:, :5].copy()
+
+        # Add qualification indicator
+        if "qualified" in df.columns:
+            df_display.insert(0, "status", df["qualified"].apply(
+                lambda x: "✓" if str(x).lower() == "true" else "✗"
+            ))
 
         # Add contact indicators
         if "linkedin_company" in df.columns:
@@ -978,6 +1042,8 @@ def _display_leads_table(df, limit: int = 20, columns: list = None, show_contact
             style = "blue"
         elif col == "#":
             style = "dim"
+        elif col == "status":
+            style = "green"
         table.add_column(col, style=style)
 
     for idx, (_, row) in enumerate(df_display.head(limit).iterrows()):
@@ -994,21 +1060,33 @@ def _display_leads_table(df, limit: int = 20, columns: list = None, show_contact
 
 
 def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
-    """Display detailed information about a single lead with navigation."""
+    """Display detailed information about a single lead with navigation.
+    Returns dict with 'last_idx' and 'changed' keys when allow_navigation=True.
+    """
     import pandas as pd
 
     current_idx = row_idx
     total_leads = len(df)
+    changes_made = False
 
     while True:
         row = df.iloc[current_idx]
 
+        # Qualification status
+        is_qualified = str(row.get('qualified', 'True')).lower() == 'true'
+        dq_reason = str(row.get('disqualify_reason', ''))
+        if is_qualified:
+            q_label = "[bold green]✓ Qualified[/bold green]"
+        else:
+            q_label = f"[bold red]✗ Disqualified[/bold red] — {dq_reason}" if dq_reason else "[bold red]✗ Disqualified[/bold red]"
+
         console.print()
         console.print(Panel(
             f"[bold cyan]{row.get('brand_name', 'Unknown')}[/bold cyan]\n"
+            f"{q_label}\n"
             f"[dim]Lead {current_idx + 1} of {total_leads}[/dim]",
             title="Lead Details",
-            border_style="blue",
+            border_style="green" if is_qualified else "red",
         ))
 
         # Basic info
@@ -1017,7 +1095,16 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
         info_table.add_column("Value")
 
         info_table.add_row("Website", str(row.get("website", "")))
-        info_table.add_row("Locations", str(row.get("location_count", "")))
+
+        # Show location count with address count if they differ
+        loc_count = row.get("location_count", "")
+        addresses_str = str(row.get("addresses", "")) if pd.notna(row.get("addresses")) else ""
+        addr_count = len([a for a in addresses_str.split("|") if a.strip()]) if addresses_str else 0
+        if loc_count and addr_count and int(loc_count) != addr_count:
+            info_table.add_row("Locations", f"{loc_count} found ({addr_count} with addresses)")
+        else:
+            info_table.add_row("Locations", str(loc_count))
+
         info_table.add_row("E-commerce", "Yes" if row.get("has_ecommerce") else "No")
 
         if pd.notna(row.get("ecommerce_platform")) and str(row.get("ecommerce_platform")).strip():
@@ -1099,10 +1186,19 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
         if not allow_navigation:
             console.print()
             inquirer.confirm(message="Press Enter to continue...", default=True).execute()
-            return current_idx
+            return {"last_idx": current_idx, "changed": changes_made}
 
         # Navigation options
         nav_choices = []
+
+        # Toggle qualification
+        if is_qualified:
+            nav_choices.append({"name": "✗ Mark as disqualified", "value": "toggle_qual"})
+        else:
+            nav_choices.append({"name": "✓ Mark as qualified", "value": "toggle_qual"})
+
+        # Delete lead
+        nav_choices.append({"name": "🗑️  Delete this lead", "value": "delete"})
 
         # Apollo enrichment option
         has_contacts = any(
@@ -1140,7 +1236,36 @@ def _display_lead_details(df, row_idx: int, allow_navigation: bool = True):
         ).execute()
 
         if action == "back":
-            return current_idx
+            return {"last_idx": current_idx, "changed": changes_made}
+        elif action == "toggle_qual":
+            idx = df.index[current_idx]
+            if is_qualified:
+                reason = inquirer.text(
+                    message="Reason for disqualification (optional):",
+                    default="",
+                ).execute()
+                df.at[idx, "qualified"] = "False"
+                df.at[idx, "disqualify_reason"] = reason
+                console.print(f"[yellow]Marked as disqualified[/yellow]")
+            else:
+                df.at[idx, "qualified"] = "True"
+                df.at[idx, "disqualify_reason"] = ""
+                console.print(f"[green]Marked as qualified[/green]")
+            changes_made = True
+        elif action == "delete":
+            confirm = inquirer.confirm(
+                message=f"Delete '{row.get('brand_name', 'Unknown')}'? This cannot be undone.",
+                default=False,
+            ).execute()
+            if confirm:
+                df.drop(df.index[current_idx], inplace=True)
+                df.reset_index(drop=True, inplace=True)
+                total_leads = len(df)
+                changes_made = True
+                console.print(f"[red]Lead deleted. {total_leads} remaining.[/red]")
+                if total_leads == 0:
+                    return {"last_idx": 0, "changed": changes_made}
+                current_idx = min(current_idx, total_leads - 1)
         elif action == "apollo":
             _enrich_single_lead(df, current_idx)
         elif action == "outreach":
@@ -1192,34 +1317,34 @@ def _enrich_single_lead(df, row_idx: int):
         console.print("[yellow]No data found on Apollo for this company.[/yellow]")
         return
 
-    # Ensure contact columns exist as string type (pandas may infer them as numeric)
+    # Ensure enrichment columns exist as object type (avoids str dtype rejection of non-str values)
     contact_cols = []
     for i in range(1, 5):
         for suffix in ("name", "title", "email", "phone", "linkedin"):
             contact_cols.append(f"contact_{i}_{suffix}")
-    for col in contact_cols + ["linkedin_company", "industry"]:
+    for col in contact_cols + ["linkedin_company", "industry", "employee_count"]:
         if col not in df.columns:
             df[col] = ""
         else:
             df[col] = df[col].astype(object)
 
-    # Update DataFrame in-place
+    # Update DataFrame in-place (convert all values to str for consistency)
     idx = df.index[row_idx]
     if result.company.linkedin_url:
-        df.at[idx, "linkedin_company"] = result.company.linkedin_url
+        df.at[idx, "linkedin_company"] = str(result.company.linkedin_url)
     if result.company.industry:
-        df.at[idx, "industry"] = result.company.industry
+        df.at[idx, "industry"] = str(result.company.industry)
     if result.company.employee_count:
-        df.at[idx, "employee_count"] = result.company.employee_count
+        df.at[idx, "employee_count"] = str(result.company.employee_count)
 
     contact_count = 0
     email_count = 0
     for i, contact in enumerate(result.contacts[:4], 1):
-        df.at[idx, f"contact_{i}_name"] = contact.name
-        df.at[idx, f"contact_{i}_title"] = contact.title
-        df.at[idx, f"contact_{i}_email"] = contact.email or ""
-        df.at[idx, f"contact_{i}_phone"] = contact.phone or ""
-        df.at[idx, f"contact_{i}_linkedin"] = contact.linkedin_url or ""
+        df.at[idx, f"contact_{i}_name"] = str(contact.name or "")
+        df.at[idx, f"contact_{i}_title"] = str(contact.title or "")
+        df.at[idx, f"contact_{i}_email"] = str(contact.email or "")
+        df.at[idx, f"contact_{i}_phone"] = str(contact.phone or "")
+        df.at[idx, f"contact_{i}_linkedin"] = str(contact.linkedin_url or "")
         contact_count += 1
         if contact.email:
             email_count += 1
@@ -1781,23 +1906,40 @@ def select_checkpoint(pipeline: Pipeline) -> Optional[Path]:
 
 
 def show_summary(verticals: list[str], countries: list[str]):
-    """Display a summary of what will be searched."""
-    table = Table(title="Search Configuration", box=box.ROUNDED)
-    table.add_column("Setting", style="cyan", no_wrap=True)
-    table.add_column("Value", style="green")
+    """Display a summary of what will be searched, with full cost breakdown."""
+    # ── Configuration table ──────────────────────────────────────
+    config_table = Table(title="Search Configuration", box=box.ROUNDED)
+    config_table.add_column("Setting", style="cyan", no_wrap=True)
+    config_table.add_column("Value", style="green")
 
-    # Search mode
-    table.add_row("Search Mode", settings.search_mode.capitalize())
+    config_table.add_row("Search Mode", settings.search_mode.capitalize())
 
-    # Verticals - from actual selection
     vertical_names = [VERTICALS.get(v, v).split(" (")[0] for v in verticals]
-    table.add_row("Verticals", ", ".join(vertical_names))
+    config_table.add_row("Verticals", ", ".join(vertical_names))
 
-    # Countries - from actual selection
     country_names = [COUNTRIES.get(c, c).split(" (")[0] for c in countries]
-    table.add_row("Countries", ", ".join(country_names))
+    config_table.add_row("Countries", ", ".join(country_names))
 
-    # Calculate cities and queries based on mode
+    if settings.enrichment.enabled:
+        provider = settings.enrichment.provider.capitalize()
+        config_table.add_row("Enrichment", f"{provider} (max {settings.enrichment.max_contacts} contacts)")
+    else:
+        config_table.add_row("Enrichment", "Disabled")
+
+    if settings.email_verification.enabled:
+        verify_opts = ["MX records"]
+        if settings.email_verification.verify_smtp:
+            verify_opts.append("SMTP")
+        if settings.email_verification.include_risky:
+            verify_opts.append("include risky")
+        config_table.add_row("Email Verification", ", ".join(verify_opts))
+    else:
+        config_table.add_row("Email Verification", "Disabled")
+
+    console.print()
+    console.print(config_table)
+
+    # ── Cost breakdown table ─────────────────────────────────────
     mode_cities = settings.get_cities_for_mode()
     cities = []
     for country in countries:
@@ -1805,36 +1947,82 @@ def show_summary(verticals: list[str], countries: list[str]):
     cities_count = len(cities)
 
     mode_queries = settings.get_queries_for_mode()
-    queries = []
-    for vertical in verticals:
-        queries.extend(mode_queries.get(vertical, []))
-    queries_count = len(queries)
+    query_count = sum(len(mode_queries.get(v, [])) for v in verticals)
 
-    total_searches = cities_count * queries_count
-    table.add_row("Cities", str(cities_count))
-    table.add_row("Queries per city", str(queries_count))
-    table.add_row("Est. SerpAPI Calls", f"~{total_searches}")
+    # Stage 1: keyword search
+    search_calls = cities_count * query_count
 
-    # Enrichment settings
+    # Stage 1b: grid search (suburb coverage)
+    grid_calls = 0
+    if settings.discovery.nearby_grid_enabled:
+        points_per_city = 5 if settings.discovery.nearby_grid_points == "cardinal" else 9
+        grid_calls = cities_count * points_per_city * len(verticals)
+
+    total_serpapi = search_calls + grid_calls
+
+    # Estimate SerpAPI cost (~$0.005 per search on typical plans)
+    est_cost = total_serpapi * 0.005
+
+    cost_table = Table(title="Estimated API Calls", box=box.ROUNDED)
+    cost_table.add_column("Stage", style="cyan", no_wrap=True)
+    cost_table.add_column("Calls", style="yellow", justify="right")
+    cost_table.add_column("API", style="dim")
+    cost_table.add_column("Cost", style="bold", justify="right")
+
+    cost_table.add_row(
+        "1. Keyword Search",
+        str(search_calls),
+        "SerpAPI",
+        f"~${search_calls * 0.005:.2f}",
+    )
+    cost_table.add_row(
+        "",
+        f"  {cities_count} cities x {query_count} queries",
+        "",
+        "",
+    )
+
+    if grid_calls > 0:
+        cost_table.add_row(
+            "1b. Grid Search",
+            str(grid_calls),
+            "SerpAPI",
+            f"~${grid_calls * 0.005:.2f}",
+        )
+        cost_table.add_row(
+            "",
+            f"  {cities_count} cities x {points_per_city} pts x {len(verticals)} vert",
+            "",
+            "",
+        )
+    else:
+        cost_table.add_row("1b. Grid Search", "0", "SerpAPI (disabled)", "$0.00")
+
+    cost_table.add_row("2. Web Scraping", "0", "disabled", "[dim]$0.00[/dim]")
+    cost_table.add_row("3. Brand Expansion", "varies", "direct HTTP", "[green]FREE[/green]")
+    cost_table.add_row("4. E-commerce Check", "varies", "direct HTTP", "[green]FREE[/green]")
+    cost_table.add_row("5. Website Health", "varies", "direct HTTP", "[green]FREE[/green]")
+
     if settings.enrichment.enabled:
-        provider = settings.enrichment.provider.capitalize()
-        table.add_row("Enrichment", f"{provider} (max {settings.enrichment.max_contacts} contacts)")
+        enrichment_provider = settings.enrichment.provider
+        if enrichment_provider == "apollo":
+            cost_table.add_row("6. Enrichment", "per lead", "Apollo.io", "1 credit/lead")
+        else:
+            cost_table.add_row("6. Enrichment", "per lead", "LinkedIn scrape", "[green]FREE[/green]")
     else:
-        table.add_row("Enrichment", "Disabled")
+        cost_table.add_row("6. Enrichment", "skipped", "disabled", "$0.00")
 
-    # Email verification settings
-    if settings.email_verification.enabled:
-        verify_opts = ["MX records"]
-        if settings.email_verification.verify_smtp:
-            verify_opts.append("SMTP")
-        if settings.email_verification.include_risky:
-            verify_opts.append("include risky")
-        table.add_row("Email Verification", ", ".join(verify_opts))
-    else:
-        table.add_row("Email Verification", "Disabled")
+    # Totals
+    cost_table.add_section()
+    cost_table.add_row(
+        "[bold]Total SerpAPI[/bold]",
+        f"[bold]{total_serpapi}[/bold]",
+        "",
+        f"[bold]~${est_cost:.2f}[/bold]",
+    )
 
     console.print()
-    console.print(table)
+    console.print(cost_table)
     console.print()
 
 

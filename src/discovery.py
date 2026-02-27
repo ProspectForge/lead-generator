@@ -9,13 +9,10 @@ from src.serpapi_search import SerpApiSearcher
 from src.geocoder import CityGeocoder
 from src.brand_expander import BrandExpander
 from src.deduplicator import Deduplicator, MergedPlace
-from src.scraper.bestof_scraper import BestOfScraper
 
 console = Console()
 logger = logging.getLogger(__name__)
 
-# Limits for sampling/batching
-SAMPLE_CITIES_LIMIT = 10
 BRANDS_TO_EXPAND_LIMIT = 20
 
 # Transient error codes that should be silently ignored (handled by retries)
@@ -40,7 +37,6 @@ class Discovery:
         self.geocoder = CityGeocoder()
         self.expander = BrandExpander(api_key=settings.serpapi_api_key)
         self.deduplicator = Deduplicator()
-        self.bestof_scraper = BestOfScraper(firecrawl_api_key=settings.firecrawl_api_key)
 
     async def run(
         self,
@@ -56,20 +52,17 @@ class Discovery:
         all_places.extend(gp_results)
         console.print(f"  [green]Found {len(gp_results)} places from search[/green]")
 
-        # Stage 1b: Nearby grid search (extended mode only)
-        if getattr(self.settings, 'search_mode', 'extended') == "extended":
-            console.print("[bold cyan]Discovery Stage 1b:[/bold cyan] Nearby Grid Search")
+        # Stage 1b: Nearby grid search (covers suburban areas around each city)
+        if self.settings.discovery.nearby_grid_enabled:
+            console.print("[bold cyan]Discovery Stage 1b:[/bold cyan] Nearby Grid Search (suburbs)")
             grid_results = await self._run_nearby_grid_search(verticals, countries)
             all_places.extend(grid_results)
             console.print(f"  [green]Found {len(grid_results)} places from grid search[/green]")
         else:
-            console.print("  [dim]Skipping grid search (lean mode)[/dim]")
+            console.print("  [dim]Skipping grid search (disabled)[/dim]")
 
-        # Stage 2: Web scraping
-        console.print("[bold cyan]Discovery Stage 2:[/bold cyan] Web Scraping")
-        scrape_results = await self._run_scraping(verticals, countries)
-        all_places.extend(scrape_results)
-        console.print(f"  [green]Found {len(scrape_results)} places from scraping[/green]")
+        # Stage 2: Web scraping (disabled — Firecrawl/Google scraping unreliable)
+        console.print("  [dim]Stage 2 (web scraping) disabled — use SerpAPI + grid search instead[/dim]")
 
         # Stage 3: Brand expansion
         console.print("[bold cyan]Discovery Stage 3:[/bold cyan] Brand Expansion")
@@ -243,62 +236,6 @@ class Discovery:
             for coro in asyncio.as_completed(coros):
                 result = await coro
                 results.extend(result)
-                progress.advance(task)
-
-        return results
-
-    async def _run_scraping(
-        self,
-        verticals: list[str],
-        countries: list[str]
-    ) -> list[dict]:
-        """Run web scraping for additional leads."""
-        results = []
-
-        cities = self._build_city_list(countries)
-
-        # Sample cities for best-of scraping (limit to avoid too many requests)
-        sample_cities = cities[:SAMPLE_CITIES_LIMIT]
-
-        # Build scraping tasks
-        scrape_tasks = []
-        mode_queries = self.settings.get_queries_for_mode()
-        for vertical in verticals:
-            queries = mode_queries.get(vertical, [])
-            if not queries:
-                continue
-            query = queries[0]  # Use first query as representative
-            for city in sample_cities:
-                scrape_tasks.append((city, query, vertical))
-
-        if not scrape_tasks:
-            return results
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"[cyan]Scraping {len(scrape_tasks)} city/vertical combos...", total=len(scrape_tasks))
-
-            for city, query, vertical in scrape_tasks:
-                try:
-                    brands = await self.bestof_scraper.scrape_city(city, query)
-                    for brand in brands:
-                        results.append({
-                            "name": brand.name,
-                            "address": "",
-                            "website": brand.website,
-                            "place_id": None,
-                            "city": city,
-                            "vertical": vertical,
-                            "source": "bestof_scrape"
-                        })
-                except Exception as e:
-                    if not _is_transient_error(e):
-                        logger.warning("Scraping failed for %s in %s: %s", query, city, e)
                 progress.advance(task)
 
         return results

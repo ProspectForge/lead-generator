@@ -6,8 +6,8 @@ from src.linkedin_enrich import LinkedInCompanyData, Contact
 
 
 @pytest.mark.asyncio
-async def test_filters_by_apollo_location_count():
-    """Leads with apollo_location_count > max are filtered out."""
+async def test_disqualifies_by_apollo_location_count():
+    """Leads with apollo_location_count > max are marked disqualified."""
     pipeline = Pipeline()
     leads = [
         {
@@ -28,13 +28,22 @@ async def test_filters_by_apollo_location_count():
 
     result = await pipeline.stage_4b_quality_gate(leads)
 
-    assert len(result) == 1
-    assert result[0]["brand_name"] == "Good Store"
+    # All leads returned (mark, not filter)
+    assert len(result) == 2
+
+    flaman = next(r for r in result if r["brand_name"] == "Flaman Fitness")
+    good = next(r for r in result if r["brand_name"] == "Good Store")
+
+    assert flaman["qualified"] is False
+    assert "Too many locations (36)" == flaman["disqualify_reason"]
+
+    assert good["qualified"] is True
+    assert good["disqualify_reason"] == ""
 
 
 @pytest.mark.asyncio
-async def test_filters_by_employee_count():
-    """Leads with employee_count > max are filtered out when no location data."""
+async def test_disqualifies_by_employee_count():
+    """Leads with employee_count > max are marked disqualified when no location data."""
     pipeline = Pipeline()
     leads = [
         {
@@ -55,12 +64,19 @@ async def test_filters_by_employee_count():
 
     result = await pipeline.stage_4b_quality_gate(leads)
 
-    assert len(result) == 1
-    assert result[0]["brand_name"] == "Small Biz"
+    assert len(result) == 2
+
+    big = next(r for r in result if r["brand_name"] == "Big Corp")
+    small = next(r for r in result if r["brand_name"] == "Small Biz")
+
+    assert big["qualified"] is False
+    assert big["disqualify_reason"] == "Too many employees (1500)"
+
+    assert small["qualified"] is True
 
 
 @pytest.mark.asyncio
-async def test_filters_by_linkedin_location_count():
+async def test_disqualifies_by_linkedin_location_count():
     """When Apollo location is null, falls back to LinkedIn scrape."""
     pipeline = Pipeline()
     leads = [
@@ -87,7 +103,9 @@ async def test_filters_by_linkedin_location_count():
 
         result = await pipeline.stage_4b_quality_gate(leads)
 
-    assert len(result) == 0
+    assert len(result) == 1
+    assert result[0]["qualified"] is False
+    assert result[0]["disqualify_reason"] == "Too many locations (25)"
 
 
 @pytest.mark.asyncio
@@ -146,6 +164,7 @@ async def test_linkedin_supplements_contacts():
         result = await pipeline.stage_4b_quality_gate(leads)
 
     assert len(result) == 1
+    assert result[0]["qualified"] is True
     assert result[0]["contact_1_name"] == "Existing Contact"  # Not overwritten
     assert result[0]["contact_2_name"] == "LI Person A"
     assert result[0]["contact_3_name"] == "LI Person B"
@@ -153,7 +172,7 @@ async def test_linkedin_supplements_contacts():
 
 @pytest.mark.asyncio
 async def test_no_data_passes_through():
-    """Leads with no Apollo or LinkedIn data pass through."""
+    """Leads with no Apollo or LinkedIn data pass through as qualified."""
     pipeline = Pipeline()
     leads = [
         {
@@ -169,3 +188,4 @@ async def test_no_data_passes_through():
 
     assert len(result) == 1
     assert result[0]["brand_name"] == "Unknown Store"
+    assert result[0]["qualified"] is True

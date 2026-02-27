@@ -1,10 +1,11 @@
-# Outreach Templates — RASAI Inventory Automation
+# Outreach Templates — RASAI Retail Stabilization
 
-Campaign for multi-location retailers with e-commerce presence.
+Campaign for profitable but operationally fragile multi-channel retailers ($1M–$10M) who don't fully trust their backend.
 
-**Positioning:** Consulting + implementation (done-for-you automation)
-**Tone:** Technical, founder-to-founder
-**CTA:** Case study → 15-min discovery call
+**Positioning:** We stabilize profitable retailers before growth exposes the cracks.
+**Tone:** Direct, founder-to-founder, hits identity — not savings pitches
+**CTA:** Free Retail Stability Diagnostic (read-only POS audit) → 15-min walkthrough → custom proposal
+**Entry offer:** "If your inventory 'works' but feels fragile — we'll show you exactly where your operation breaks under growth. For free."
 
 ## CSV Field Mapping
 
@@ -22,28 +23,49 @@ Use these placeholders when personalizing:
 | `{ecommerce_platform}` | `ecommerce_platform` |
 | `{cities}` | `cities` |
 | `{linkedin}` | `contact_1_linkedin` |
+| `{industry}` | `industry` |
+
+## The 5 Fragility Points (Use in Messaging)
+
+Reference these when personalizing — pick 2-3 most relevant to the lead:
+
+1. **Margin exposure** — supplier costs shift but online pricing and repricer data stays stale, margins are quietly compressing across channels
+2. **Revenue at risk** — stockouts nobody sees, oversells that got normalized, lost sales that never get counted
+3. **Key-person dependency** — inventory logic lives in one employee's head, the whole operation depends on tribal knowledge
+4. **Growth fragility** — if revenue jumped 30%, the backend breaks — chaos compounds with scale
+5. **Operational drag** — hours per week burned on manual reconciliation, spreadsheets, and PO creation that shouldn't exist
 
 ---
 
 ## Cold Email
 
-**Subject:** Inventory sync across {location_count} locations — how are you handling it?
+**Subject:** If {brand_name} scaled 30% tomorrow, would your inventory survive it?
 
 **Alt subjects:**
-- Quick question about {brand_name}'s inventory workflow
-- {contact_name} — automating reorders across {location_count} locations
+- {brand_name} is profitable — but is the backend actually stable?
+- Quick question about {brand_name}'s inventory operation
 
 **Body:**
 
-Hey {contact_name},
+Hi {contact_name},
 
-I noticed {brand_name} runs {location_count} locations and sells on {marketplaces} — so I'm guessing you know the pain of keeping inventory, costs, and reorder decisions in sync across all of it.
+I noticed {brand_name} has {location_count} locations and sells online — that's a lot of moving parts.
 
-We recently built an automation system for a multi-location retailer in a similar setup. They were spending 6+ hours a week pulling reports, cross-referencing supplier catalogs, and manually syncing Amazon product costs with their actual POS costs. Now it's zero. The system generates purchase orders from real sales data, syncs pricing automatically, and plans FBA shipments — all without spreadsheets.
+Here's what we see with almost every retailer at your stage: the business is profitable, but the backend is fragile. Inventory counts you hope are right. Pricing that may have drifted. One or two people holding the whole system together in their heads.
 
-I'm not selling a generic SaaS — we build these integrations specifically for multi-channel retailers. If your team is spending 3+ hours a week on inventory tasks, it's probably worth a 15-minute call to see if the math makes sense for you.
+It works — until you grow. Then the cracks compound.
 
-Open to a quick chat this week?
+We're offering a free Retail Stability Diagnostic to a handful of {industry} retailers this month. We plug into your POS (read-only) and show you:
+
+- Where your margins are silently exposed
+- Which stockouts are costing you revenue you never counted
+- How much of your operation depends on one person's memory
+- What breaks first if revenue jumps 30%
+- How many hours are being burned on work that shouldn't exist
+
+No pitch, no obligation. Your numbers, on a page.
+
+Want me to run one for {brand_name}?
 
 — Farzin
 RASAI
@@ -54,7 +76,7 @@ RASAI
 
 (~300 char limit)
 
-Hi {contact_name} — I work with multi-location retailers who sell on {marketplaces}. We automate inventory sync, purchase orders, and cost management between POS and marketplace systems. Built a system that cut one client's manual inventory work from 6 hrs/week to zero. Would love to connect.
+Hi {contact_name} — I work with {industry} retailers doing $1M–$10M across store + online. We help them find where their operation is structurally exposed before growth makes it worse. Running free Stability Diagnostics this month. Would love to connect.
 
 ---
 
@@ -64,35 +86,59 @@ Hi {contact_name} — I work with multi-location retailers who sell on {marketpl
 
 Thanks for connecting, {contact_name}.
 
-Quick question — how's your team currently handling reorder decisions across your {location_count} locations? Specifically, keeping what's on your shelves in sync with what {marketplaces} says you need to restock.
+Quick honest question — if your inventory manager quit tomorrow, how confident are you that {brand_name}'s reordering, channel sync, and pricing would survive it?
 
-We built an automation layer for a retailer in a similar setup (multi-location POS + Amazon FBA, 500+ SKUs). It pulls actual sales history and generates purchase orders automatically — no more spreadsheets or guesswork. Also keeps product costs in sync across systems so margins don't drift.
+We just ran a stability audit for a multi-location {industry} retailer. They were profitable — but structurally fragile. One key person held the whole inventory logic. Growth was actually making things worse.
 
-If that sounds relevant, happy to walk you through what we built in 15 minutes. No pitch deck — just the actual system.
+We're running free Retail Stability Diagnostics this month. Read-only access to your POS — we show you exactly where your operation is exposed. No pitch, just your numbers.
+
+Worth 10 minutes to find out?
+
+---
+
+## Follow-Up Email
+
+(Send 5 days after initial email if no response)
+
+**Subject:** Re: If {brand_name} scaled 30% tomorrow, would your inventory survive it?
+
+**Body:**
+
+Hi {contact_name},
+
+Just bumping this. The diagnostic is free and takes about 10 minutes of your time (read-only POS access).
+
+One retailer we did this for discovered their entire reorder process depended on one employee's spreadsheet — and their margins had drifted 8% across channels without anyone noticing.
+
+Worth finding out if {brand_name} has similar exposure?
+
+— Farzin
+RASAI
 
 ---
 
 ## Personalization Tips
 
-1. **Check their website** ({website}) before sending — mention a specific product or category they sell
-2. **Reference their tech stack** — if they use Shopify + Amazon, mention that specific combo
+1. **Check their website** ({website}) before sending — mention a specific product category or channel complexity
+2. **Reference their tech stack** — if they use {pos_platform} + {ecommerce_platform}, mention that specific combo and the sync challenge
 3. **Mention their city** — "I saw you have locations in {cities}" adds local credibility
-4. **Use their title** — if {contact_title} is "Operations Manager", lean into the time-savings angle; if "Owner/CEO", lean into the ROI angle
-5. **One channel per lead** — don't email AND LinkedIn the same person simultaneously
-6. **Follow up once** after 3-5 business days if no response, then move on
+4. **Adapt by title:**
+   - **Operations Manager** — lean into key-person dependency and operational drag
+   - **Owner/CEO** — lean into growth fragility and margin exposure
+   - **E-commerce Manager** — lean into channel desync and pricing drift
+5. **Pick the right fragility points** — reference the 2-3 most relevant to their setup (e.g., if they sell on Amazon, emphasize margin exposure; if multi-location, emphasize growth fragility and key-person risk)
+6. **One channel per lead** — don't email AND LinkedIn the same person simultaneously
+7. **The offer sells itself** — free, read-only, their real numbers, no meeting required first, valuable even if they never buy
+8. **Hit identity, not savings** — don't lead with "save 5 hours a week." Lead with "do you actually trust your numbers?" That's what keeps them up at night.
 
-## Follow-Up Email
+## Outreach Cadence
 
-(Send 3-5 days after initial email if no response)
-
-**Subject:** Re: Inventory sync across {location_count} locations — how are you handling it?
-
-**Body:**
-
-Hey {contact_name},
-
-Just bumping this in case it got buried. Happy to share a quick breakdown of what we built for a similar multi-location retailer — no commitment, just context.
-
-If timing's off, no worries at all.
-
-— Farzin
+| Day | Action |
+|-----|--------|
+| 1 | Cold email (stability angle) |
+| 1 | LinkedIn connection request |
+| 5 | Follow-up email |
+| 7 | LinkedIn follow-up (if connected) |
+| 12 | Email #3 — case study angle (structural fragility found) |
+| 18 | Final email — "Should I close your file?" |
+| 21 | Move to nurture list |

@@ -1,4 +1,5 @@
 # src/geocoder.py
+"""City geocoding using OpenStreetMap Nominatim (free, no API key)."""
 import asyncio
 import json
 import logging
@@ -13,12 +14,16 @@ CACHE_FILE = Path(__file__).parent.parent / "data" / "city_coordinates.json"
 
 
 class CityGeocoder:
-    """Geocodes city names to lat/lng using Google Geocoding API with file cache."""
+    """Geocodes city names to lat/lng using OpenStreetMap Nominatim with file cache."""
 
-    GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+    NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
-    def __init__(self, api_key: str, concurrency: int = 5):
-        self.api_key = api_key
+    def __init__(self, concurrency: int = 1):
+        """Initialize geocoder.
+
+        Args:
+            concurrency: Max parallel requests (Nominatim policy: 1 req/sec).
+        """
         self.concurrency = concurrency
         self._cache: dict[str, tuple[float, float]] = {}
         self._load_cache()
@@ -39,12 +44,18 @@ class CityGeocoder:
         with open(CACHE_FILE, "w") as f:
             json.dump({k: list(v) for k, v in self._cache.items()}, f, indent=2)
 
-    async def _geocode_api(self, city: str) -> dict:
-        """Call Google Geocoding API."""
+    async def _geocode_api(self, city: str) -> list[dict]:
+        """Call Nominatim search API."""
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                self.GEOCODE_URL,
-                params={"address": city, "key": self.api_key},
+                self.NOMINATIM_URL,
+                params={
+                    "q": city,
+                    "format": "json",
+                    "limit": 1,
+                    "addressdetails": 0,
+                },
+                headers={"User-Agent": "LeadGenerator/1.0"},
             )
             response.raise_for_status()
             return response.json()
@@ -55,11 +66,11 @@ class CityGeocoder:
             return self._cache[city]
 
         try:
-            data = await self._geocode_api(city)
-            results = data.get("results", [])
+            results = await self._geocode_api(city)
             if results:
-                loc = results[0]["geometry"]["location"]
-                coords = (loc["lat"], loc["lng"])
+                lat = float(results[0]["lat"])
+                lng = float(results[0]["lon"])
+                coords = (lat, lng)
                 self._cache[city] = coords
                 return coords
         except Exception as e:
@@ -79,6 +90,8 @@ class CityGeocoder:
                 coords = await self.geocode(city)
                 if coords:
                     results[city] = coords
+                # Nominatim requires max 1 request per second
+                await asyncio.sleep(1.0)
 
         tasks = [geocode_one(city) for city in cities]
         await asyncio.gather(*tasks)

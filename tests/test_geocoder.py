@@ -1,4 +1,5 @@
 # tests/test_geocoder.py
+"""Tests for city geocoding via OpenStreetMap Nominatim."""
 import pytest
 from unittest.mock import AsyncMock, patch
 from src.geocoder import CityGeocoder
@@ -7,13 +8,11 @@ from src.geocoder import CityGeocoder
 @pytest.mark.asyncio
 async def test_geocode_city_returns_coordinates():
     """Should return lat/lng for a city string."""
-    geocoder = CityGeocoder(api_key="test_key")
+    geocoder = CityGeocoder()
 
-    mock_response = {
-        "results": [{
-            "geometry": {"location": {"lat": 41.8781, "lng": -87.6298}}
-        }]
-    }
+    mock_response = [
+        {"lat": "41.8781", "lon": "-87.6298", "display_name": "Chicago, IL, USA"}
+    ]
 
     with patch.object(geocoder, '_geocode_api', new_callable=AsyncMock) as mock_api:
         mock_api.return_value = mock_response
@@ -26,7 +25,7 @@ async def test_geocode_city_returns_coordinates():
 @pytest.mark.asyncio
 async def test_geocode_uses_cache():
     """Should return cached coordinates without API call."""
-    geocoder = CityGeocoder(api_key="test_key")
+    geocoder = CityGeocoder()
     geocoder._cache = {"Chicago, IL": (41.8781, -87.6298)}
 
     with patch.object(geocoder, '_geocode_api', new_callable=AsyncMock) as mock_api:
@@ -39,14 +38,12 @@ async def test_geocode_uses_cache():
 @pytest.mark.asyncio
 async def test_geocode_batch():
     """Should geocode a list of cities, using cache when available."""
-    geocoder = CityGeocoder(api_key="test_key")
+    geocoder = CityGeocoder()
     geocoder._cache = {"Boston, MA": (42.3601, -71.0589)}
 
-    mock_response = {
-        "results": [{
-            "geometry": {"location": {"lat": 40.7128, "lng": -74.0060}}
-        }]
-    }
+    mock_response = [
+        {"lat": "40.7128", "lon": "-74.0060", "display_name": "New York, NY, USA"}
+    ]
 
     with patch.object(geocoder, '_geocode_api', new_callable=AsyncMock) as mock_api:
         mock_api.return_value = mock_response

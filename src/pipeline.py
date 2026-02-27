@@ -243,6 +243,8 @@ class Pipeline:
             "marketplace_links": brand.marketplace_links,
             "priority": brand.priority,
             "ecommerce_platform": brand.ecommerce_platform,
+            "qualified": brand.qualified,
+            "disqualify_reason": brand.disqualify_reason,
         }
 
     def _deserialize_brand(self, data: dict) -> BrandGroup:
@@ -260,6 +262,8 @@ class Pipeline:
             marketplace_links=data.get("marketplace_links", {}),
             priority=data.get("priority", "medium"),
             ecommerce_platform=data.get("ecommerce_platform"),
+            qualified=data.get("qualified", True),
+            disqualify_reason=data.get("disqualify_reason", ""),
         )
 
     def _show_stage_header(self, stage_num: int, title: str, description: str):
@@ -371,15 +375,27 @@ class Pipeline:
             console.print(f"  [dim]• Removed {removed} duplicate places (same place_id from different city searches)[/dim]")
         return deduped
 
-    def stage_2_group(self, places: list[dict]) -> list[BrandGroup]:
+    def stage_2_group(self, places: list[dict], searched_cities: list[str]) -> list[BrandGroup]:
         """Group places by brand and filter by location count."""
         self._show_stage_header(2, "Brand Grouping", "Normalizing names and grouping by brand")
 
         # Deduplicate places by place_id before grouping
         places = self._deduplicate_places(places)
 
+        # Dynamic min_locations: with few cities, lower the bar
+        # 50+ cities → min 3, 20-49 → min 2, <20 → min 1
+        num_cities = len(searched_cities)
+        if num_cities >= 50:
+            min_locations = 3
+        elif num_cities >= 20:
+            min_locations = 2
+        else:
+            min_locations = 1
+
+        console.print(f"  [dim]• {num_cities} cities searched → min_locations={min_locations}[/dim]")
+
         with console.status("[cyan]Analyzing brands...[/cyan]"):
-            grouper = BrandGrouper(min_locations=3, max_locations=10, resolve_redirects=True)
+            grouper = BrandGrouper(min_locations=min_locations, max_locations=10, resolve_redirects=True)
             groups = grouper.group(places)
 
             # Apply blocklist filter
@@ -397,7 +413,7 @@ class Pipeline:
         table.add_row("Total places", str(len(places)))
         table.add_row("Unique brands", str(len(groups)))
         table.add_row("After blocklist filter", str(len(filtered)))
-        table.add_row("Brands with 3-10 locations", f"[bold]{len(filtered)}[/bold]")
+        table.add_row(f"Brands with {min_locations}-10 locations", f"[bold]{len(filtered)}[/bold]")
 
         console.print(table)
 
@@ -512,6 +528,7 @@ class Pipeline:
             """Check if a brand's website is alive. Returns (brand, is_healthy, reason)."""
             async with semaphore:
                 url = brand.website
+                url = url.strip()
                 if not url.startswith(("http://", "https://")):
                     url = f"https://{url}"
 
@@ -531,7 +548,7 @@ class Pipeline:
 
                         return (brand, True, "OK")
 
-                except (httpx.ConnectError, httpx.ConnectTimeout):
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.InvalidURL):
                     return (brand, False, "Connection failed")
                 except httpx.TimeoutException:
                     return (brand, False, "Timeout")
@@ -597,8 +614,8 @@ class Pipeline:
             playwright_timeout=settings.ecommerce_playwright_fallback_timeout,
         )
         semaphore = asyncio.Semaphore(concurrency)
-        # Rate limiter: allow max N requests per second to avoid CDN-level 429s
-        request_interval = 0.3  # seconds between request starts
+        # Rate limiter: stagger request starts to avoid CDN-level 429s
+        request_interval = 1.0  # seconds between request starts
         results: dict[str, tuple[BrandGroup, bool]] = {}  # brand_name -> (brand, has_ecommerce)
         skipped = 0
 
@@ -614,7 +631,8 @@ class Pipeline:
         crawl_failure_count = 0
         fail_reasons: dict[str, int] = {}
 
-        async def check_brand(brand: BrandGroup, idx: int, progress, task) -> tuple[BrandGroup, bool]:
+        # result states: "ecommerce", "no_ecommerce", "crawl_failed"
+        async def check_brand(brand: BrandGroup, idx: int, progress, task) -> tuple[BrandGroup, str]:
             """Check a single brand with semaphore + staggered start."""
             nonlocal crawl_failure_count
             # Stagger request starts to avoid CDN-level rate limits
@@ -632,14 +650,16 @@ class Pipeline:
                     brand.priority = result.priority
                     brand.ecommerce_platform = result.platform  # Shopify, WooCommerce, etc.
                     progress.advance(task)
-                    return (brand, result.has_ecommerce)
+                    if result.crawl_failed:
+                        return (brand, "crawl_failed")
+                    return (brand, "ecommerce" if result.has_ecommerce else "no_ecommerce")
                 except Exception as e:
                     crawl_failure_count += 1
                     reason = str(type(e).__name__)
                     fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
                     console.print(f"  [red]✗ Error: {brand.normalized_name.title()}: {e}[/red]")
                     progress.advance(task)
-                    return (brand, False)
+                    return (brand, "crawl_failed")
 
         with Progress(
             SpinnerColumn(),
@@ -655,18 +675,36 @@ class Pipeline:
             tasks = [check_brand(brand, i, progress, task) for i, brand in enumerate(brands_with_website)]
             check_results = await asyncio.gather(*tasks)
 
-        # Collect results
-        ecommerce_brands = [brand for brand, has_ecom in check_results if has_ecom]
-        no_ecommerce_count = len(brands_with_website) - len(ecommerce_brands) - crawl_failure_count
+        # Collect results — mark non-ecommerce brands as disqualified
+        ecommerce_count = 0
+        no_ecommerce_count = 0
+        for brand, status in check_results:
+            if status == "ecommerce":
+                ecommerce_count += 1
+            elif status == "no_ecommerce":
+                brand.qualified = False
+                brand.disqualify_reason = "No e-commerce detected"
+                no_ecommerce_count += 1
+            # crawl_failed: keep qualified=True (benefit of the doubt)
+
+        # Also mark brands without websites
+        for brand in brands:
+            if not brand.website:
+                brand.qualified = False
+                brand.disqualify_reason = "No website"
+
+        all_brands = [brand for brand, _ in check_results]
+        # Add back brands without websites (weren't checked)
+        all_brands.extend([b for b in brands if not b.website])
 
         # Summary
         console.print()
         table = Table(box=box.SIMPLE)
         table.add_column("Status", style="cyan")
         table.add_column("Count", style="green", justify="right")
-        table.add_row("With e-commerce", f"[bold green]{len(ecommerce_brands)}[/bold green]")
+        table.add_row("With e-commerce", f"[bold green]{ecommerce_count}[/bold green]")
         table.add_row("Without e-commerce", str(no_ecommerce_count))
-        table.add_row("Fetch failed", str(crawl_failure_count))
+        table.add_row("Fetch failed (included)", f"[yellow]{crawl_failure_count}[/yellow]")
         table.add_row("Skipped (no website)", str(skipped))
         console.print(table)
 
@@ -680,7 +718,7 @@ class Pipeline:
                 fail_table.add_row(reason, str(count))
             console.print(fail_table)
 
-        return ecommerce_brands
+        return all_brands
 
     @staticmethod
     def _parse_employee_count(value) -> Optional[int]:
@@ -716,20 +754,30 @@ class Pipeline:
         provider = settings.enrichment.provider
         self._show_stage_header(4, f"Contact Enrichment ({provider.title()})", "Finding company pages and executive contacts")
 
-        if not brands:
-            console.print("  [yellow]⚠ No brands to enrich[/yellow]")
-            return []
+        # Split qualified vs disqualified
+        qualified_brands = [b for b in brands if b.qualified]
+        disqualified_brands = [b for b in brands if not b.qualified]
 
-        # Select enricher based on config
-        if provider == "apollo":
-            if not settings.apollo_api_key:
-                console.print("  [red]✗ APOLLO_API_KEY not set in .env[/red]")
-                console.print("  [dim]  Get your key at: https://app.apollo.io/[/dim]")
-                console.print("  [dim]  Or set enrichment.provider = \"linkedin\" in config/cities.json[/dim]")
-                return []
-            return await self._enrich_with_apollo(brands)
-        else:
-            return await self._enrich_with_linkedin(brands, linkedin_enricher=linkedin_enricher)
+        console.print(f"  [dim]• {len(qualified_brands)} qualified leads to enrich, {len(disqualified_brands)} unqualified (skipped)[/dim]")
+
+        enriched = []
+        if qualified_brands:
+            # Select enricher based on config
+            if provider == "apollo":
+                if not settings.apollo_api_key:
+                    console.print("  [red]✗ APOLLO_API_KEY not set in .env[/red]")
+                    console.print("  [dim]  Get your key at: https://app.apollo.io/[/dim]")
+                    console.print("  [dim]  Or set enrichment.provider = \"linkedin\" in config/cities.json[/dim]")
+                else:
+                    enriched = await self._enrich_with_apollo(qualified_brands)
+            else:
+                enriched = await self._enrich_with_linkedin(qualified_brands, linkedin_enricher=linkedin_enricher)
+
+        # Convert disqualified brands to lead dicts (no enrichment)
+        for brand in disqualified_brands:
+            enriched.append(self._brand_to_lead_dict(brand))
+
+        return enriched
 
     async def _enrich_with_apollo(self, brands: list[BrandGroup]) -> list[dict]:
         """Enrich using Apollo.io API."""
@@ -793,6 +841,8 @@ class Pipeline:
                             "industry": result.company.industry or "",
                             "technology_names": result.company.technology_names,
                             "apollo_location_count": result.company.retail_location_count,
+                            "qualified": True,
+                            "disqualify_reason": "",
                         }
 
                         # Add contacts
@@ -940,6 +990,8 @@ class Pipeline:
                         "employee_count": linkedin_data.employee_range if linkedin_data else "",
                         "industry": linkedin_data.industry if linkedin_data else "",
                         "apollo_location_count": linkedin_data.location_count if linkedin_data else None,
+                        "qualified": True,
+                        "disqualify_reason": "",
                     }
 
                     # Add contacts (up to 4)
@@ -1018,7 +1070,7 @@ class Pipeline:
         return enriched
 
     async def stage_4b_quality_gate(self, enriched: list[dict], linkedin_enricher=None) -> list[dict]:
-        """Filter leads using Apollo/LinkedIn data and supplement contacts."""
+        """Verify chain sizes, mark disqualified leads, supplement contacts."""
         self._show_stage_header("4b", "Quality Gate", "Verifying chain sizes and supplementing contacts")
 
         if not enriched:
@@ -1029,14 +1081,16 @@ class Pipeline:
         max_employees = settings.quality_gate_max_employees
         enricher = linkedin_enricher or LinkedInEnricher(flaresolverr_url=settings.flaresolverr_url or None)
 
-        console.print(f"  [dim]• Checking {len(enriched)} leads[/dim]")
+        # Only check qualified leads (already-disqualified ones pass through untouched)
+        qualified_leads = [l for l in enriched if l.get("qualified", True)]
+        console.print(f"  [dim]• Checking {len(qualified_leads)} qualified leads[/dim]")
         console.print(f"  [dim]• Max locations: {max_locations}, Max employees: {max_employees}[/dim]")
         console.print()
 
-        passed = []
+        passed_count = 0
         filtered_count = 0
 
-        for lead in enriched:
+        for lead in qualified_leads:
             brand_name = lead.get("brand_name", "Unknown")
             apollo_locs = lead.get("apollo_location_count")
             employee_count = lead.get("employee_count")
@@ -1044,22 +1098,22 @@ class Pipeline:
 
             # Signal 1: Apollo retail_location_count
             if apollo_locs and isinstance(apollo_locs, (int, float)) and apollo_locs > max_locations:
-                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — Apollo says {int(apollo_locs)} locations")
+                lead["qualified"] = False
+                lead["disqualify_reason"] = f"Too many locations ({int(apollo_locs)})"
+                console.print(f"  [red]✗ Disqualified:[/red] {brand_name} — Apollo says {int(apollo_locs)} locations")
                 filtered_count += 1
                 continue
 
             # Signal 2: LinkedIn company page location count
-            # (already fetched in stage 4 and stored as apollo_location_count)
-            # Only re-scrape if we have a LinkedIn URL but no location data yet
             linkedin_data = None
             if apollo_locs is None and linkedin_url:
-                # Check if employee data already hints at location count
-                # Only re-scrape if we have zero data from stage 4
                 if not employee_count:
                     try:
                         linkedin_data = await enricher.scrape_company_page(linkedin_url)
                         if linkedin_data.location_count and linkedin_data.location_count > max_locations:
-                            console.print(f"  [red]✗ Filtered:[/red] {brand_name} — LinkedIn says {linkedin_data.location_count} locations")
+                            lead["qualified"] = False
+                            lead["disqualify_reason"] = f"Too many locations ({linkedin_data.location_count})"
+                            console.print(f"  [red]✗ Disqualified:[/red] {brand_name} — LinkedIn says {linkedin_data.location_count} locations")
                             filtered_count += 1
                             continue
                     except Exception:
@@ -1068,7 +1122,9 @@ class Pipeline:
             # Signal 3: Employee count heuristic
             parsed_employees = self._parse_employee_count(employee_count)
             if apollo_locs is None and parsed_employees and parsed_employees > max_employees:
-                console.print(f"  [red]✗ Filtered:[/red] {brand_name} — {parsed_employees} employees (likely large chain)")
+                lead["qualified"] = False
+                lead["disqualify_reason"] = f"Too many employees ({parsed_employees})"
+                console.print(f"  [red]✗ Disqualified:[/red] {brand_name} — {parsed_employees} employees (likely large chain)")
                 filtered_count += 1
                 continue
 
@@ -1076,11 +1132,9 @@ class Pipeline:
             has_empty_slot = any(not lead.get(f"contact_{i}_name") for i in range(1, 5))
             if has_empty_slot and linkedin_url:
                 try:
-                    # Use find_contacts() which tries people page scrape then DDG fallback
                     supplement_contacts = await enricher.find_contacts(
                         brand_name, linkedin_url=linkedin_url, max_contacts=4
                     )
-                    # Also merge company page people if available
                     if linkedin_data and linkedin_data.people:
                         existing_slugs = {
                             re.search(r'/in/([\w-]+)', c.linkedin_url).group(1)
@@ -1093,7 +1147,6 @@ class Pipeline:
                                 supplement_contacts.append(person)
                                 existing_slugs.add(slug_m.group(1))
 
-                    # Fill empty contact slots
                     existing_names = {lead.get(f"contact_{j}_name", "").lower() for j in range(1, 5)}
                     for person in supplement_contacts:
                         if person.name.lower() in existing_names:
@@ -1112,7 +1165,10 @@ class Pipeline:
                 except Exception:
                     pass
 
-            passed.append(lead)
+            # Explicitly mark as qualified (ensures key exists even for older data)
+            lead.setdefault("qualified", True)
+            lead.setdefault("disqualify_reason", "")
+            passed_count += 1
             console.print(f"  [green]✓ Passed:[/green] {brand_name}")
 
         # Summary
@@ -1120,11 +1176,11 @@ class Pipeline:
         table = Table(box=box.SIMPLE)
         table.add_column("Status", style="cyan")
         table.add_column("Count", style="green", justify="right")
-        table.add_row("Passed quality gate", f"[bold green]{len(passed)}[/bold green]")
-        table.add_row("Filtered out", f"[bold red]{filtered_count}[/bold red]")
+        table.add_row("Passed quality gate", f"[bold green]{passed_count}[/bold green]")
+        table.add_row("Disqualified", f"[bold red]{filtered_count}[/bold red]")
         console.print(table)
 
-        return passed
+        return enriched  # Return ALL leads (qualified + disqualified)
 
     def stage_5_score(self, enriched: list[dict]) -> list[dict]:
         """Score leads based on tech stack and other signals."""
@@ -1180,6 +1236,7 @@ class Pipeline:
 
             # Define column order (priority columns first)
             priority_cols = [
+                "qualified", "disqualify_reason",
                 "priority_score", "uses_lightspeed", "pos_platform",
                 "brand_name", "location_count", "website",
                 "detected_marketplaces", "tech_stack",
@@ -1200,27 +1257,39 @@ class Pipeline:
             remaining_cols = [c for c in df.columns if c not in ordered_cols]
             df = df[ordered_cols + remaining_cols]
 
-            # Sort by priority_score descending
+            # Sort: qualified first, then by priority_score descending
+            sort_cols = []
+            sort_asc = []
+            if 'qualified' in df.columns:
+                sort_cols.append('qualified')
+                sort_asc.append(False)  # True (qualified) before False
             if 'priority_score' in df.columns:
-                df = df.sort_values(by='priority_score', ascending=False)
+                sort_cols.append('priority_score')
+                sort_asc.append(False)
+            if sort_cols:
+                df = df.sort_values(by=sort_cols, ascending=sort_asc)
 
             output_file = self.output_dir / f"leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             df.to_csv(output_file, index=False)
 
         # Final summary
-        console.print(f"  [green]✓ Exported {len(data)} leads[/green]")
+        qualified_count = sum(1 for d in data if d.get("qualified", True))
+        disqualified_count = len(data) - qualified_count
+        console.print(f"  [green]✓ Exported {len(data)} leads ({qualified_count} qualified, {disqualified_count} disqualified)[/green]")
         console.print(f"  [dim]  File: {output_file}[/dim]")
 
-        # Show preview
-        if data:
-            console.print(f"\n  [bold]Preview (first 3 leads):[/bold]")
+        # Show preview (qualified leads first)
+        qualified_leads = [d for d in data if d.get("qualified", True)]
+        preview_leads = qualified_leads[:3] if qualified_leads else data[:3]
+        if preview_leads:
+            console.print(f"\n  [bold]Preview (top 3 qualified leads):[/bold]")
             table = Table(box=box.SIMPLE, show_lines=True)
             table.add_column("Brand", style="cyan")
             table.add_column("Locations", justify="center")
             table.add_column("Website", style="dim")
             table.add_column("Contacts", justify="center")
 
-            for lead in data[:3]:
+            for lead in preview_leads:
                 contacts = sum(1 for i in range(1, 5) if lead.get(f"contact_{i}_name"))
                 table.add_row(
                     lead["brand_name"],
@@ -1233,41 +1302,44 @@ class Pipeline:
 
         return str(output_file)
 
+    def _brand_to_lead_dict(self, brand: BrandGroup) -> dict:
+        """Convert a single BrandGroup to a lead dict."""
+        addresses = []
+        for loc in brand.locations:
+            addr = loc.get("address", "")
+            if addr and addr not in addresses:
+                addresses.append(addr)
+
+        row = {
+            "brand_name": brand.normalized_name.title(),
+            "location_count": brand.location_count,
+            "website": brand.website,
+            "has_ecommerce": brand.qualified,  # qualified means e-commerce was detected or assumed
+            "ecommerce_platform": brand.ecommerce_platform or "",
+            "marketplaces": ", ".join(brand.marketplaces),
+            "priority": brand.priority,
+            "cities": ", ".join(brand.cities[:5]),
+            "addresses": " | ".join(addresses),
+            "linkedin_company": "",
+            "employee_count": "",
+            "industry": "",
+            "qualified": brand.qualified,
+            "disqualify_reason": brand.disqualify_reason,
+        }
+
+        # Empty contact slots
+        for i in range(1, 5):
+            row[f"contact_{i}_name"] = ""
+            row[f"contact_{i}_title"] = ""
+            row[f"contact_{i}_email"] = ""
+            row[f"contact_{i}_phone"] = ""
+            row[f"contact_{i}_linkedin"] = ""
+
+        return row
+
     def _brands_to_leads(self, brands: list[BrandGroup]) -> list[dict]:
         """Convert BrandGroups to lead dicts without enrichment data."""
-        leads = []
-        for brand in brands:
-            addresses = []
-            for loc in brand.locations:
-                addr = loc.get("address", "")
-                if addr and addr not in addresses:
-                    addresses.append(addr)
-
-            row = {
-                "brand_name": brand.normalized_name.title(),
-                "location_count": brand.location_count,
-                "website": brand.website,
-                "has_ecommerce": True,
-                "ecommerce_platform": brand.ecommerce_platform or "",
-                "marketplaces": ", ".join(brand.marketplaces),
-                "priority": brand.priority,
-                "cities": ", ".join(brand.cities[:5]),
-                "addresses": " | ".join(addresses),
-                "linkedin_company": "",
-                "employee_count": "",
-                "industry": "",
-            }
-
-            # Empty contact slots
-            for i in range(1, 5):
-                row[f"contact_{i}_name"] = ""
-                row[f"contact_{i}_title"] = ""
-                row[f"contact_{i}_email"] = ""
-                row[f"contact_{i}_phone"] = ""
-                row[f"contact_{i}_linkedin"] = ""
-
-            leads.append(row)
-        return leads
+        return [self._brand_to_lead_dict(brand) for brand in brands]
 
     async def enrich_csv(self, csv_path: str, max_contacts: int = 4) -> str:
         """Enrich an existing leads CSV with Apollo contact data."""
@@ -1280,7 +1352,7 @@ class Pipeline:
             console.print("  [dim]  Get your key at: https://app.apollo.io/[/dim]")
             return csv_path
 
-        df = pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
         console.print(f"  [dim]• Loaded {len(df)} leads from {csv_path}[/dim]")
 
         enricher = ApolloEnricher(api_key=settings.apollo_api_key)
@@ -1484,7 +1556,7 @@ class Pipeline:
 
         # Stage 2: Group and filter
         if start_stage < 2:
-            brands = self.stage_2_group(places)
+            brands = self.stage_2_group(places, searched_cities)
             checkpoint.brands = [self._serialize_brand(b) for b in brands]
             checkpoint.stage = 2
             self._save_checkpoint(checkpoint)
@@ -1570,11 +1642,13 @@ class Pipeline:
 
         # Final summary
         elapsed = datetime.now() - start_time
+        qualified_count = sum(1 for lead in scored if lead.get("qualified", True))
+        disqualified_count = len(scored) - qualified_count
         console.print()
         console.print(Panel(
             f"[bold green]✓ Pipeline Complete![/bold green]\n\n"
             f"Duration: {elapsed.seconds // 60}m {elapsed.seconds % 60}s\n"
-            f"Leads found: {len(enriched)}\n"
+            f"Leads found: {len(scored)} ({qualified_count} qualified, {disqualified_count} disqualified)\n"
             f"Output: {output_file}",
             title="[bold green]Summary[/bold green]",
             border_style="green",

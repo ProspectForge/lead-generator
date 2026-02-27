@@ -24,8 +24,8 @@ class EcommerceResult:
 
 class EcommerceChecker:
     DEFAULT_PAGES_TO_CHECK = 3
-    MAX_RETRIES = 3
-    RETRY_DELAYS = [2, 5, 10]
+    MAX_RETRIES = 4
+    RETRY_DELAYS = [3, 8, 15, 25]
     REQUEST_TIMEOUT = 15.0
 
     # Common shop page paths to probe after the homepage
@@ -247,6 +247,7 @@ class EcommerceChecker:
 
     async def _fetch_site_pages(self, url: str) -> tuple[list[str], Optional[str], list[httpx.Headers]]:
         """Fetch homepage + shop pages directly via HTTP. Returns (pages, fail_reason, all_headers)."""
+        url = url.strip()
         all_headers = []
         async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT) as client:
             # Always fetch homepage first
@@ -496,7 +497,7 @@ class EcommerceChecker:
                     url_pattern = rf'https?://[^\s\)\]"\'<>]*{pattern}[^\s\)\]"\'<>]*'
                     url_match = re.search(url_pattern, content, re.IGNORECASE)
                     if url_match and marketplace not in marketplace_links:
-                        marketplace_links[marketplace] = url_match.group(0)
+                        marketplace_links[marketplace] = url_match.group(0).strip()
                     break
 
         # Check text/badge patterns

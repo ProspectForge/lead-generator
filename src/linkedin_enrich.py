@@ -58,7 +58,7 @@ class LinkedInEnricher:
             flaresolverr_url: FlareSolverr endpoint URL. Falls back to direct HTTP.
             cookie_file: Path to LinkedIn cookies JSON for authenticated Playwright scraping.
         """
-        self.flaresolverr_url = flaresolverr_url or self.DEFAULT_FLARESOLVERR_URL
+        self.flaresolverr_url = (flaresolverr_url or self.DEFAULT_FLARESOLVERR_URL).strip()
         self._flaresolverr_available: Optional[bool] = None
         self._cookie_file = cookie_file
         # Playwright state (lazy-initialized via start_browser())
@@ -171,6 +171,7 @@ class LinkedInEnricher:
         """Fetch a page using Playwright headless Chromium (best JS rendering)."""
         if not self._browser_context:
             return None
+        url = url.strip()
         page = None
         try:
             page = await self._browser_context.new_page()

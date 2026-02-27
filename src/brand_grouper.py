@@ -32,7 +32,7 @@ def resolve_redirect(url: str, timeout: float = 3.0) -> str:
     if not url:
         return url
 
-    # Ensure URL has a scheme
+    url = url.strip()
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
 
@@ -109,7 +109,7 @@ class NameNormalizer:
             return ""
 
         try:
-            # Handle URLs without scheme
+            url = url.strip()
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
 
@@ -357,6 +357,8 @@ class BrandGroup:
     marketplace_links: dict[str, str] = field(default_factory=dict)
     priority: str = "medium"
     ecommerce_platform: Optional[str] = None  # Detected platform (shopify, woocommerce, etc.)
+    qualified: bool = True
+    disqualify_reason: str = ""
 
 
 class BrandGrouper:
@@ -437,7 +439,32 @@ class BrandGrouper:
         # Phase 2: Merge groups with same domain and similar names
         merged_groups = self._merge_by_domain(list(groups.values()))
 
+        # Phase 3: Deduplicate locations within each group
+        for group in merged_groups:
+            group.locations = self._dedupe_locations(group.locations)
+            group.location_count = len(group.locations)
+
         return merged_groups
+
+    @staticmethod
+    def _dedupe_locations(locations: list[dict]) -> list[dict]:
+        """Remove duplicate locations within a brand group by place_id, then address."""
+        seen_ids = set()
+        seen_addresses = set()
+        unique = []
+        for loc in locations:
+            pid = loc.get("place_id", "")
+            addr = loc.get("address", "").strip().lower()
+            if pid and pid in seen_ids:
+                continue
+            if not pid and addr and addr in seen_addresses:
+                continue
+            if pid:
+                seen_ids.add(pid)
+            if addr:
+                seen_addresses.add(addr)
+            unique.append(loc)
+        return unique
 
     def _merge_by_domain(self, groups: list[BrandGroup]) -> list[BrandGroup]:
         """Merge groups that share the same domain and have related names."""
@@ -554,6 +581,10 @@ class BrandGrouper:
         # Apply merges
         if result.merges:
             groups = self._apply_merges(groups, result.merges)
+            # Re-deduplicate locations after merges
+            for group in groups:
+                group.locations = self._dedupe_locations(group.locations)
+                group.location_count = len(group.locations)
 
         # Filter out LLM-detected large chains
         if result.large_chains:
